@@ -6,6 +6,8 @@
     <string>Cinema Player</string>
     <key>CFBundleExecutable</key>
     <string>CinemaPlayer</string>
+    <key>CFBundleIconFile</key>
+    <string>CinemaPlayer</string>
     <key>CFBundleIdentifier</key>
     <string>local.cinema-player</string>
     <key>CFBundleInfoDictionaryVersion</key>
