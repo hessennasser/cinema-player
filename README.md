@@ -51,6 +51,8 @@ open "build/Cinema Player.app"
 
 To publish a website edit, run `zsh Scripts/publish-site.sh`.
 
+To build, package, and publish a release (plus the website when needed), use `zsh Scripts/release.sh v0.2.0 --publish-site`. The complete, safe release checklist is in [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Contributing and security
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Please report security concerns privately as described in [SECURITY.md](SECURITY.md).
