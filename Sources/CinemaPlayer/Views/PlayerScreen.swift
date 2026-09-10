@@ -35,6 +35,7 @@ struct PlayerScreen: View {
     @EnvironmentObject private var playback: PlaybackController
     @EnvironmentObject private var fullscreen: VideoOnlyFullscreenController
     @EnvironmentObject private var controlsVisibility: PlaybackControlsVisibility
+    @EnvironmentObject private var subtitles: SubtitleController
     @State private var videoLayout: VideoLayout = .fit
 
     var body: some View {
@@ -55,6 +56,12 @@ struct PlayerScreen: View {
         .onDisappear {
             controlsVisibility.stopMonitoring()
         }
+        .onChange(of: playback.currentTime) { _, time in
+            subtitles.update(for: time)
+        }
+        .onChange(of: playback.currentItem?.id) { _, _ in
+            subtitles.clear()
+        }
         .animation(.easeOut(duration: 0.18), value: controlsVisibility.isVisible)
     }
 
@@ -64,6 +71,17 @@ struct PlayerScreen: View {
             NativePlayerView(player: playback.player, videoGravity: videoLayout.gravity)
             MouseActivityTrackingView {
                 controlsVisibility.revealTemporarily()
+            }
+
+            if let cue = subtitles.activeCue {
+                VStack {
+                    Spacer(minLength: 0)
+                    SubtitleOverlay(text: cue.text, videoOnly: videoOnly)
+                        .padding(.horizontal, videoOnly ? 92 : 52)
+                        .padding(.bottom, videoOnly ? 124 : 132)
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
             if controlsVisibility.isVisible {
@@ -203,6 +221,8 @@ struct PlayerScreen: View {
                 .menuStyle(.borderlessButton)
                 .help("Video fit")
 
+                subtitleMenu
+
                 ControlIconButton(
                     icon: playback.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill",
                     label: playback.volume == 0 ? "Unmute" : "Mute"
@@ -238,6 +258,92 @@ struct PlayerScreen: View {
             RoundedRectangle(cornerRadius: 19, style: .continuous)
                 .stroke(CinemaTheme.electricBlue.opacity(0.23), lineWidth: 1)
         }
+    }
+
+    private var subtitleMenu: some View {
+        Menu {
+            Button("Choose SRT Subtitle…") {
+                subtitles.chooseSubtitle {
+                    playback.selectEmbeddedSubtitle(id: nil)
+                }
+            }
+
+            if subtitles.isLoaded {
+                Divider()
+                Text("External: \(externalSubtitleTitle)")
+                Menu("Timing \(subtitles.syncOffsetTitle)") {
+                    Button("Show 0.5s earlier") {
+                        subtitles.adjustSync(by: 0.5)
+                    }
+                    Button("Show 0.5s later") {
+                        subtitles.adjustSync(by: -0.5)
+                    }
+                    Divider()
+                    Button("Reset timing") {
+                        subtitles.resetSync()
+                    }
+                }
+                Button("Turn off external subtitle") {
+                    subtitles.clear()
+                }
+            }
+
+            if !playback.embeddedSubtitleTracks.isEmpty {
+                Divider()
+                Menu("Embedded subtitles") {
+                    Button("Off") {
+                        playback.selectEmbeddedSubtitle(id: nil)
+                    }
+                    ForEach(playback.embeddedSubtitleTracks) { track in
+                        Button {
+                            subtitles.clear()
+                            playback.selectEmbeddedSubtitle(id: track.id)
+                        } label: {
+                            Label(
+                                track.title,
+                                systemImage: playback.selectedEmbeddedSubtitleID == track.id ? "checkmark" : "captions.bubble"
+                            )
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: subtitleIcon)
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Subtitles")
+        .accessibilityLabel("Subtitles")
+    }
+
+    private var subtitleIcon: String {
+        subtitles.isLoaded || playback.selectedEmbeddedSubtitleID != nil
+            ? "captions.bubble.fill"
+            : "captions.bubble"
+    }
+
+    private var externalSubtitleTitle: String {
+        subtitles.loadedSubtitleName ?? "Subtitle"
+    }
+}
+
+private struct SubtitleOverlay: View {
+    let text: String
+    let videoOnly: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: videoOnly ? 25 : 19, weight: .semibold, design: .rounded))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.white.opacity(0.14), lineWidth: 1)
+            }
+            .accessibilityLabel("Subtitle: \(text)")
     }
 }
 

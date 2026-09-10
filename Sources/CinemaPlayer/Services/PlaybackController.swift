@@ -26,6 +26,8 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var rate: PlaybackRate = .normal
     @Published private(set) var volume: Double = 1
+    @Published private(set) var embeddedSubtitleTracks: [EmbeddedSubtitleTrack] = []
+    @Published private(set) var selectedEmbeddedSubtitleID: String?
     @Published var errorMessage: String?
 
     private let resumeStoreKey = "cinema-player.resume-positions.v1"
@@ -35,9 +37,12 @@ final class PlaybackController: ObservableObject {
     private var resumePositions: [UUID: Double] = [:]
     private var pendingStartTime: Double = 0
     private var lastPersistedSecond = -1
+    private var legibleGroup: AVMediaSelectionGroup?
+    private var legibleOptionsByID: [String: AVMediaSelectionOption] = [:]
 
     init() {
         loadResumePositions()
+        player.appliesMediaSelectionCriteriaAutomatically = false
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
@@ -57,6 +62,10 @@ final class PlaybackController: ObservableObject {
         errorMessage = nil
         pendingStartTime = resumeTime(for: item)
         lastPersistedSecond = -1
+        embeddedSubtitleTracks = []
+        selectedEmbeddedSubtitleID = nil
+        legibleGroup = nil
+        legibleOptionsByID = [:]
 
         if item.url.startAccessingSecurityScopedResource() {
             activeScopedURL = item.url
@@ -121,6 +130,21 @@ final class PlaybackController: ObservableObject {
         setVolume(volume > 0 ? 0 : 1)
     }
 
+    func selectEmbeddedSubtitle(id: String?) {
+        guard let currentPlayerItem = player.currentItem,
+              let legibleGroup else { return }
+
+        guard let id else {
+            currentPlayerItem.select(nil, in: legibleGroup)
+            selectedEmbeddedSubtitleID = nil
+            return
+        }
+
+        guard let option = legibleOptionsByID[id] else { return }
+        currentPlayerItem.select(option, in: legibleGroup)
+        selectedEmbeddedSubtitleID = id
+    }
+
     private func updateProgress(with time: CMTime) {
         currentTime = max(time.seconds.isFinite ? time.seconds : 0, 0)
 
@@ -135,6 +159,7 @@ final class PlaybackController: ObservableObject {
             Task { @MainActor in
                 switch observedItem.status {
                 case .readyToPlay:
+                    self?.loadEmbeddedSubtitleTracks(from: observedItem.asset)
                     self?.startPlaybackWhenReady()
                 case .failed:
                     let reason = observedItem.error?.localizedDescription ?? "The video codec is not supported by macOS."
@@ -170,6 +195,24 @@ final class PlaybackController: ObservableObject {
                 self.player.playImmediately(atRate: Float(self.rate.rawValue))
                 self.isPlaying = true
             }
+        }
+    }
+
+    private func loadEmbeddedSubtitleTracks(from asset: AVAsset) {
+        Task { [weak self] in
+            guard let group = try? await asset.loadMediaSelectionGroup(for: .legible),
+                  let self,
+                  self.player.currentItem?.asset === asset else {
+                return
+            }
+
+            self.legibleGroup = group
+            let tracks = group.options.enumerated().map { index, option in
+                let id = "embedded-\(index)-\(option.displayName)"
+                self.legibleOptionsByID[id] = option
+                return EmbeddedSubtitleTrack(id: id, title: option.displayName)
+            }
+            self.embeddedSubtitleTracks = tracks
         }
     }
 
