@@ -7,6 +7,7 @@ struct CinemaPlayerApp: App {
     @StateObject private var keyboardControls = KeyboardControlMonitor()
     @StateObject private var fullscreen = VideoOnlyFullscreenController()
     @StateObject private var controlsVisibility = PlaybackControlsVisibility()
+    @StateObject private var subtitles = SubtitleController()
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +16,7 @@ struct CinemaPlayerApp: App {
                 .environmentObject(playback)
                 .environmentObject(fullscreen)
                 .environmentObject(controlsVisibility)
+                .environmentObject(subtitles)
                 .task {
                     keyboardControls.start(
                         with: playback,

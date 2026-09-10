@@ -20,6 +20,7 @@ struct ContentView: View {
     @EnvironmentObject private var library: MediaLibrary
     @EnvironmentObject private var playback: PlaybackController
     @EnvironmentObject private var fullscreen: VideoOnlyFullscreenController
+    @EnvironmentObject private var subtitles: SubtitleController
     @State private var selection: MediaItem.ID?
     @State private var searchText = ""
     @State private var scope: LibraryScope = .all
@@ -56,15 +57,22 @@ struct ContentView: View {
             playback.play(selectedItem)
         }
         .alert("Cinema Player", isPresented: Binding(
-            get: { library.errorMessage != nil || playback.errorMessage != nil },
-            set: { if !$0 { library.errorMessage = nil; playback.errorMessage = nil } }
+            get: { library.errorMessage != nil || playback.errorMessage != nil || subtitles.errorMessage != nil },
+            set: {
+                if !$0 {
+                    library.errorMessage = nil
+                    playback.errorMessage = nil
+                    subtitles.errorMessage = nil
+                }
+            }
         )) {
             Button("OK", role: .cancel) {
                 library.errorMessage = nil
                 playback.errorMessage = nil
+                subtitles.errorMessage = nil
             }
         } message: {
-            Text(library.errorMessage ?? playback.errorMessage ?? "Unknown error")
+            Text(library.errorMessage ?? playback.errorMessage ?? subtitles.errorMessage ?? "Unknown error")
         }
     }
 
