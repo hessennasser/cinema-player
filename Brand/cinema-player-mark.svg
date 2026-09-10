@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Cinema Player logo</title>
+  <rect width="128" height="128" rx="32" fill="#0C131A"/>
+  <path d="M91 38.5A38 38 0 1 0 91 89.5" fill="none" stroke="#2C6389" stroke-linecap="round" stroke-width="14"/>
+  <path d="m57 48 27 16-27 16Z" fill="#D65A48"/>
+</svg>

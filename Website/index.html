@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Cinema Player is a private, open-source video player for macOS.">
+    <title>Cinema Player — local video, properly yours</title>
+    <link rel="icon" href="assets/cinema-player-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Cinema Player home">
+        <img src="assets/cinema-player-mark.svg" alt="">
+        <span>Cinema Player</span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#features">Features</a>
+        <a href="https://github.com/hessennasser/cinema-player">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-heading">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> Built for the files you already own</p>
+          <h1>Local video,<br><em>properly yours.</em></h1>
+          <p class="lede">Cinema Player is a calm, native macOS home for your movies and videos. No account, no ads, no tracking, no streaming catalogue.</p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/hessennasser/cinema-player/releases/latest/download/Cinema-Player-macOS.zip">Download for macOS <span aria-hidden="true">↓</span></a>
+            <a class="button secondary" href="https://github.com/hessennasser/cinema-player">View source <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="fine-print">macOS 14+ · Open source · MIT licensed</p>
+        </div>
+
+        <div class="stage-wrap" aria-label="Cinema Player interface preview">
+          <div class="stage">
+            <div class="stage-top"><span class="dot red"></span><span class="dot"></span><span class="dot"></span><span>NOW PLAYING</span></div>
+            <div class="movie-frame">
+              <div class="horizon"></div>
+              <div class="moon"></div>
+              <div class="play-mark">▶</div>
+            </div>
+            <div class="stage-controls">
+              <span>00:42</span><div class="progress"><i></i></div><span>−01:28:06</span>
+              <div class="control-line"><span>↶ 10</span><b>Ⅱ</b><span>10 ↷</span><i class="spacer"></i><span>1.0×</span><span>▱</span><span>◖</span></div>
+            </div>
+          </div>
+          <div class="caption"><span class="caption-mark"></span> Resume exactly where you stopped.</div>
+        </div>
+      </section>
+
+      <section class="principles" id="features" aria-labelledby="features-heading">
+        <div>
+          <p class="eyebrow"><span></span> Designed around watching</p>
+          <h2 id="features-heading">The player gets out<br>of the way.</h2>
+        </div>
+        <div class="feature-list">
+          <article>
+            <span>01</span>
+            <div><h3>Your library, remembered</h3><p>Import local files once. Cinema Player keeps secure access, thumbnails, details, favorites, and your viewing position.</p></div>
+          </article>
+          <article>
+            <span>02</span>
+            <div><h3>Controls when you need them</h3><p>Move the mouse to reveal a precise progress bar, skips, speed, fit modes, volume, and fullscreen. Then they quietly disappear.</p></div>
+          </article>
+          <article>
+            <span>03</span>
+            <div><h3>Native by design</h3><p>Built in SwiftUI and AVKit for macOS. No Electron shell, no account wall, no network requirement.</p></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="open-source">
+        <img src="assets/cinema-player-mark.svg" alt="" width="72" height="72">
+        <div><p class="eyebrow"><span></span> Open source</p><h2>Make your cinema better.</h2><p>Read the code, report an issue, suggest a feature, or send a pull request. The project is intentionally small and easy to extend.</p></div>
+        <a class="text-link" href="https://github.com/hessennasser/cinema-player">Explore on GitHub <span>→</span></a>
+      </section>
+    </main>
+
+    <footer>
+      <span>© 2026 Cinema Player</span>
+      <span>Made for macOS</span>
+      <a href="https://github.com/hessennasser/cinema-player/blob/main/LICENSE">MIT License</a>
+    </footer>
+  </body>
+</html>

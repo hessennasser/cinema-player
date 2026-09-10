@@ -1,0 +1,204 @@
+import AVFoundation
+import Combine
+import Foundation
+
+enum PlaybackRate: Double, CaseIterable, Identifiable {
+    case half = 0.5
+    case normal = 1.0
+    case oneAndQuarter = 1.25
+    case oneAndHalf = 1.5
+    case double = 2.0
+
+    var id: Double { rawValue }
+
+    var title: String {
+        rawValue == 1 ? "Normal" : "\(rawValue.formatted())×"
+    }
+}
+
+@MainActor
+final class PlaybackController: ObservableObject {
+    let player = AVPlayer()
+
+    @Published private(set) var currentItem: MediaItem?
+    @Published private(set) var currentTime: Double = 0
+    @Published private(set) var duration: Double = 0
+    @Published private(set) var isPlaying = false
+    @Published private(set) var rate: PlaybackRate = .normal
+    @Published private(set) var volume: Double = 1
+    @Published var errorMessage: String?
+
+    private let resumeStoreKey = "cinema-player.resume-positions.v1"
+    private var timeObserver: Any?
+    private var activeScopedURL: URL?
+    private var statusObserver: NSKeyValueObservation?
+    private var resumePositions: [UUID: Double] = [:]
+    private var pendingStartTime: Double = 0
+    private var lastPersistedSecond = -1
+
+    init() {
+        loadResumePositions()
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            Task { @MainActor in
+                self?.updateProgress(with: time)
+            }
+        }
+    }
+
+    func play(_ item: MediaItem) {
+        saveProgress(for: currentItem)
+        stopAccessingCurrentFile()
+        currentItem = item
+        currentTime = 0
+        duration = 0
+        errorMessage = nil
+        pendingStartTime = resumeTime(for: item)
+        lastPersistedSecond = -1
+
+        if item.url.startAccessingSecurityScopedResource() {
+            activeScopedURL = item.url
+        }
+
+        let playerItem = AVPlayerItem(url: item.url)
+        observeStatus(of: playerItem)
+        player.replaceCurrentItem(with: playerItem)
+        isPlaying = false
+    }
+
+    func resumeTime(for item: MediaItem) -> Double {
+        resumePositions[item.id] ?? 0
+    }
+
+    func hasResumePoint(for item: MediaItem) -> Bool {
+        resumeTime(for: item) >= 15
+    }
+
+    func clearResumePoint(for item: MediaItem) {
+        resumePositions[item.id] = nil
+        saveResumePositions()
+    }
+
+    func togglePlayback() {
+        guard player.currentItem != nil else { return }
+
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.playImmediately(atRate: Float(rate.rawValue))
+            isPlaying = true
+        }
+    }
+
+    func skip(by seconds: Double) {
+        seek(to: currentTime + seconds)
+    }
+
+    func seek(to seconds: Double) {
+        let clampedTime = min(max(seconds, 0), duration)
+        player.seek(to: CMTime(seconds: clampedTime, preferredTimescale: 600))
+    }
+
+    func setRate(_ newRate: PlaybackRate) {
+        rate = newRate
+        guard isPlaying else { return }
+        player.rate = Float(newRate.rawValue)
+    }
+
+    func setVolume(_ newVolume: Double) {
+        volume = min(max(newVolume, 0), 1)
+        player.volume = Float(volume)
+    }
+
+    func changeVolume(by amount: Double) {
+        setVolume(volume + amount)
+    }
+
+    func toggleMute() {
+        setVolume(volume > 0 ? 0 : 1)
+    }
+
+    private func updateProgress(with time: CMTime) {
+        currentTime = max(time.seconds.isFinite ? time.seconds : 0, 0)
+
+        guard let itemDuration = player.currentItem?.duration.seconds, itemDuration.isFinite else { return }
+        duration = max(itemDuration, 0)
+        isPlaying = player.rate > 0
+        saveProgress(for: currentItem)
+    }
+
+    private func observeStatus(of item: AVPlayerItem) {
+        statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
+            Task { @MainActor in
+                switch observedItem.status {
+                case .readyToPlay:
+                    self?.startPlaybackWhenReady()
+                case .failed:
+                    let reason = observedItem.error?.localizedDescription ?? "The video codec is not supported by macOS."
+                    self?.errorMessage = "This video could not be played: \(reason)"
+                    self?.isPlaying = false
+                case .unknown:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    private func stopAccessingCurrentFile() {
+        activeScopedURL?.stopAccessingSecurityScopedResource()
+        activeScopedURL = nil
+    }
+
+    private func startPlaybackWhenReady() {
+        let startTime = pendingStartTime
+        pendingStartTime = 0
+
+        guard startTime > 0 else {
+            player.playImmediately(atRate: Float(rate.rawValue))
+            isPlaying = true
+            return
+        }
+
+        player.seek(to: CMTime(seconds: startTime, preferredTimescale: 600)) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.player.playImmediately(atRate: Float(self.rate.rawValue))
+                self.isPlaying = true
+            }
+        }
+    }
+
+    private func saveProgress(for item: MediaItem?) {
+        guard let item, duration > 0 else { return }
+
+        let currentSecond = Int(currentTime.rounded(.down))
+        guard currentSecond != lastPersistedSecond else { return }
+        lastPersistedSecond = currentSecond
+
+        let hasFinished = currentTime >= duration - 20
+        if currentTime >= 15, !hasFinished {
+            resumePositions[item.id] = currentTime
+        } else if hasFinished {
+            resumePositions[item.id] = nil
+        }
+        saveResumePositions()
+    }
+
+    private func loadResumePositions() {
+        guard let data = UserDefaults.standard.data(forKey: resumeStoreKey),
+              let positions = try? JSONDecoder().decode([UUID: Double].self, from: data) else {
+            return
+        }
+        resumePositions = positions
+    }
+
+    private func saveResumePositions() {
+        guard let data = try? JSONEncoder().encode(resumePositions) else { return }
+        UserDefaults.standard.set(data, forKey: resumeStoreKey)
+    }
+}
