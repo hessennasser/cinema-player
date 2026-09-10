@@ -48,6 +48,8 @@ open "build/Cinema Player.app"
 - `Website/` — the GitHub Pages source
 - `docs/ARCHITECTURE.md` — structure and extension points
 
+To publish a website edit, run `zsh Scripts/publish-site.sh`.
+
 ## Contributing and security
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Please report security concerns privately as described in [SECURITY.md](SECURITY.md).
