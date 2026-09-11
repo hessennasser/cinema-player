@@ -7,10 +7,14 @@ struct VideoPresentation {
     let resolution: String?
     let fileSize: String?
     let format: String
+    var isStream = false
 
     var detailLine: String {
-        [duration.map(TimeFormatter.string), resolution, fileSize, format]
+        var parts: [String?] = [duration.map(TimeFormatter.string), resolution, fileSize, format]
+        if isStream { parts.append("Stream") }
+        return parts
             .compactMap { $0 }
+            .filter { !$0.isEmpty }
             .joined(separator: " · ")
     }
 }

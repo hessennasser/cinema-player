@@ -7,6 +7,9 @@ struct MediaItem: Identifiable, Hashable {
     let bookmarkData: Data?
     let addedAt: Date
 
+    /// True when the video lives behind a link rather than on this Mac.
+    var isRemote: Bool { !url.isFileURL }
+
     init(id: UUID = UUID(), title: String, url: URL, bookmarkData: Data?, addedAt: Date = .now) {
         self.id = id
         self.title = title
@@ -44,6 +47,7 @@ struct PersistedMediaItem: Codable {
     }
 
     private func resolveURL() -> URL? {
+        guard lastKnownURL.isFileURL else { return lastKnownURL }
         guard let bookmarkData else { return lastKnownURL }
 
         var bookmarkIsStale = false

@@ -66,6 +66,9 @@ struct ContentView: View {
         .onChange(of: playback.currentItem?.id) { _, newID in
             if let newID { selection = newID }
         }
+        .sheet(isPresented: $library.isPresentingStreamPrompt) {
+            AddStreamSheet { try await library.addStream(from: $0) }
+        }
         .alert("Cinema Player", isPresented: Binding(
             get: { library.errorMessage != nil || playback.errorMessage != nil || subtitles.errorMessage != nil },
             set: {
@@ -94,7 +97,7 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background(CinemaTheme.night)
-        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
+        .onDrop(of: [.fileURL, .url, .text], isTargeted: $isDropTargeted, perform: handleDrop)
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -140,6 +143,17 @@ struct ContentView: View {
                 .tint(CinemaTheme.electricBlue)
                 .help("Add a folder of videos")
                 .accessibilityLabel("Add a folder of videos")
+
+                Button(action: library.promptForStream) {
+                    Image(systemName: "link")
+                        .font(.headline)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 4)
+                }
+                .buttonStyle(.bordered)
+                .tint(CinemaTheme.electricBlue)
+                .help("Open a video link")
+                .accessibilityLabel("Open a video link")
             }
 
             VStack(spacing: 5) {
@@ -217,6 +231,7 @@ struct ContentView: View {
                                     library.remove(item)
                                 },
                                 revealInFinder: { library.revealInFinder(item) },
+                                copyLink: { library.copyLink(for: item) },
                                 moveToTrash: {
                                     if selection == item.id { selection = nil }
                                     library.moveToTrash(item)
@@ -242,7 +257,7 @@ struct ContentView: View {
                 .foregroundStyle(CinemaTheme.quietText)
             Text(scope == .favorites ? "No favorites yet" : "Your library is ready")
                 .font(.subheadline.weight(.semibold))
-            Text(scope == .favorites ? "Use the heart on any title to keep it close." : "Add a video from your Mac to start watching.")
+            Text(scope == .favorites ? "Use the heart on any title to keep it close." : "Add a video from your Mac, or drop in a link, to start watching.")
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(CinemaTheme.quietText)
@@ -257,33 +272,71 @@ struct ContentView: View {
         if playback.currentItem != nil {
             PlayerScreen(videoOnly: false)
         } else {
-            EmptyPlayerView(addVideos: library.chooseVideos)
+            EmptyPlayerView(addVideos: library.chooseVideos, addStream: library.promptForStream)
         }
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        let fileProviders = providers.filter {
-            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-        }
-        guard !fileProviders.isEmpty else { return false }
+        guard !providers.isEmpty else { return false }
 
         Task { @MainActor in
-            var urls: [URL] = []
-            for provider in fileProviders {
-                guard let url = await loadFileURL(from: provider) else { continue }
-                urls.append(contentsOf: supportedVideos(at: url))
+            var files: [URL] = []
+            var links: [URL] = []
+
+            for provider in providers {
+                let (droppedFiles, droppedLinks) = await videoURLs(from: provider)
+                files.append(contentsOf: droppedFiles)
+                links.append(contentsOf: droppedLinks)
             }
-            if !urls.isEmpty {
-                library.add(urls: urls)
+
+            if !files.isEmpty {
+                library.add(urls: files)
+            }
+            // A dropped link may point at a page rather than the video itself,
+            // so it goes through the same resolution as a pasted one.
+            for link in links {
+                do {
+                    try await library.addStream(from: link.absoluteString)
+                } catch {
+                    library.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
             }
         }
         return true
     }
 
-    private func loadFileURL(from provider: NSItemProvider) async -> URL? {
-        await withCheckedContinuation { continuation in
+    /// A drop can carry a file, a web link, or plain text holding an address.
+    private func videoURLs(from provider: NSItemProvider) async -> (files: [URL], links: [URL]) {
+        if let url = await loadURL(from: provider) {
+            if url.isFileURL {
+                return (supportedVideos(at: url), [])
+            }
+            return ([], StreamSupport.isStreamable(url) ? [url] : [])
+        }
+
+        guard let text = await loadText(from: provider),
+              let url = StreamSupport.streamURL(from: text) else {
+            return ([], [])
+        }
+        return ([], [url])
+    }
+
+    private func loadURL(from provider: NSItemProvider) async -> URL? {
+        guard provider.canLoadObject(ofClass: URL.self) else { return nil }
+
+        return await withCheckedContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 continuation.resume(returning: url)
+            }
+        }
+    }
+
+    private func loadText(from provider: NSItemProvider) async -> String? {
+        guard provider.canLoadObject(ofClass: String.self) else { return nil }
+
+        return await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: String.self) { text, _ in
+                continuation.resume(returning: text)
             }
         }
     }
@@ -322,6 +375,7 @@ private struct LibraryRow: View {
     let toggleFavorite: () -> Void
     let remove: () -> Void
     let revealInFinder: () -> Void
+    let copyLink: () -> Void
     let moveToTrash: () -> Void
 
     var body: some View {
@@ -342,10 +396,18 @@ private struct LibraryRow: View {
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(item.title)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(2)
-                            .foregroundStyle(.white)
+                        HStack(spacing: 5) {
+                            if item.isRemote {
+                                Image(systemName: "link")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(CinemaTheme.electricBlue)
+                                    .accessibilityLabel("Streaming link")
+                            }
+                            Text(item.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                                .foregroundStyle(.white)
+                        }
                         Text(presentation?.detailLine ?? "Reading video details…")
                             .font(.caption2)
                             .foregroundStyle(CinemaTheme.quietText)
@@ -380,10 +442,16 @@ private struct LibraryRow: View {
             Button("Play", action: play)
             Button(isFavorite ? "Remove from favorites" : "Add to favorites", action: toggleFavorite)
             Divider()
-            Button("Reveal in Finder", action: revealInFinder)
+            if item.isRemote {
+                Button("Copy Link", action: copyLink)
+            } else {
+                Button("Reveal in Finder", action: revealInFinder)
+            }
             Divider()
             Button("Remove from library", role: .destructive, action: remove)
-            Button("Move to Trash", role: .destructive, action: moveToTrash)
+            if !item.isRemote {
+                Button("Move to Trash", role: .destructive, action: moveToTrash)
+            }
         }
     }
 }
@@ -412,6 +480,7 @@ struct VideoThumbnail: View {
 
 private struct EmptyPlayerView: View {
     let addVideos: () -> Void
+    let addStream: () -> Void
 
     var body: some View {
         ZStack {
@@ -433,19 +502,29 @@ private struct EmptyPlayerView: View {
                 VStack(spacing: 9) {
                     Text("Your cinema is ready")
                         .font(.system(size: 31, weight: .bold, design: .rounded))
-                    Text("Import movies from your Mac. They stay private, on your device.")
+                    Text("Import movies from your Mac, or paste a link to play a video from anywhere.")
                         .font(.body)
                         .foregroundStyle(CinemaTheme.quietText)
                 }
 
-                Button(action: addVideos) {
-                    Label("Choose videos", systemImage: "plus")
-                        .font(.headline)
-                        .padding(.horizontal, 10)
+                HStack(spacing: 11) {
+                    Button(action: addVideos) {
+                        Label("Choose videos", systemImage: "plus")
+                            .font(.headline)
+                            .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(CinemaTheme.electricBlue)
+
+                    Button(action: addStream) {
+                        Label("Open a link", systemImage: "link")
+                            .font(.headline)
+                            .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(CinemaTheme.electricBlue)
                 }
-                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(CinemaTheme.electricBlue)
             }
             .multilineTextAlignment(.center)
             .foregroundStyle(.white)
