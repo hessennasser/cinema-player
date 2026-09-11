@@ -62,7 +62,7 @@ final class PlaybackController: ObservableObject {
     private var resumePositions: [UUID: Double] = [:]
     private var pendingStartTime: Double = 0
     private var playlist: [MediaItem] = []
-    private var endObserver: NSObjectProtocol?
+    private var endObserver: AnyCancellable?
     private var lastPersistedSecond = -1
     private var legibleGroup: AVMediaSelectionGroup?
     private var legibleOptionsByID: [String: AVMediaSelectionOption] = [:]
@@ -77,12 +77,6 @@ final class PlaybackController: ObservableObject {
             Task { @MainActor in
                 self?.updateProgress(with: time)
             }
-        }
-    }
-
-    deinit {
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
         }
     }
 
@@ -167,18 +161,14 @@ final class PlaybackController: ObservableObject {
     }
 
     private func observeEnd(of item: AVPlayerItem) {
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-        }
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handlePlaybackEnd()
+        endObserver = NotificationCenter.default
+            .publisher(for: .AVPlayerItemDidPlayToEndTime, object: item)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.handlePlaybackEnd()
+                }
             }
-        }
     }
 
     private func handlePlaybackEnd() {
