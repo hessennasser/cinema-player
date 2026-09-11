@@ -50,6 +50,24 @@ final class MediaLibrary: ObservableObject {
         saveFavorites()
     }
 
+    func revealInFinder(_ item: MediaItem) {
+        NSWorkspace.shared.activateFileViewerSelecting([item.url])
+    }
+
+    func moveToTrash(_ item: MediaItem) {
+        let didAccess = item.url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { item.url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+            remove(item)
+        } catch {
+            errorMessage = "Cinema Player could not move \(item.url.lastPathComponent) to the Trash."
+        }
+    }
+
     func clear() {
         items.removeAll()
         presentations.removeAll()
