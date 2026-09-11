@@ -90,6 +90,21 @@ struct CinemaPlayerApp: App {
                         }
                     }
                 }
+
+                Menu("Streaming Quality") {
+                    Button("Auto") {
+                        playback.setPreferredMaximumHeight(nil)
+                    }
+
+                    Divider()
+
+                    ForEach(playback.availableRenditions) { rendition in
+                        Button(rendition.title) {
+                            playback.setPreferredMaximumHeight(rendition.height)
+                        }
+                    }
+                }
+                .disabled(playback.availableRenditions.isEmpty)
             }
         }
     }

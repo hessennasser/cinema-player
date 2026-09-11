@@ -175,7 +175,9 @@ struct PlayerScreen: View {
                         .font(.caption)
                         .foregroundStyle(CinemaTheme.quietText)
                     if item.isRemote, let streaming = playback.presentedResolution {
-                        Text("Streaming at \(streaming)")
+                        Text(playback.preferredMaximumHeight == nil
+                            ? "Streaming at \(streaming)"
+                            : "Streaming at \(streaming) · capped to \(playback.preferredQualityTitle)")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(CinemaTheme.electricBlue)
                     }
@@ -304,6 +306,10 @@ struct PlayerScreen: View {
                 .menuStyle(.borderlessButton)
                 .help("Video fit")
 
+                if !playback.availableRenditions.isEmpty {
+                    qualityMenu
+                }
+
                 subtitleMenu
 
                 if playback.audioTracks.count > 1 {
@@ -345,6 +351,38 @@ struct PlayerScreen: View {
             RoundedRectangle(cornerRadius: 19, style: .continuous)
                 .stroke(CinemaTheme.electricBlue.opacity(0.23), lineWidth: 1)
         }
+    }
+
+    /// Only shown for an adaptive stream, which is the only thing with more
+    /// than one quality to choose between.
+    private var qualityMenu: some View {
+        Menu {
+            Button {
+                playback.setPreferredMaximumHeight(nil)
+            } label: {
+                Label("Auto", systemImage: playback.preferredMaximumHeight == nil ? "checkmark" : "")
+            }
+
+            Divider()
+
+            ForEach(playback.availableRenditions) { rendition in
+                Button {
+                    playback.setPreferredMaximumHeight(rendition.height)
+                } label: {
+                    Label(
+                        "\(rendition.title) · \(rendition.detail)",
+                        systemImage: playback.preferredMaximumHeight == rendition.height ? "checkmark" : ""
+                    )
+                }
+            }
+        } label: {
+            Label(playback.preferredQualityTitle, systemImage: "dial.high")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.weight(.semibold))
+                .frame(minWidth: 62)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Maximum streaming quality")
     }
 
     private var subtitleMenu: some View {

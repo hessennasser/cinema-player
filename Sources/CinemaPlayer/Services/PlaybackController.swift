@@ -56,6 +56,11 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var downloadProgress: Double?
     /// Set when a link needs fetching, so the library can remember it.
     @Published private(set) var discoveredLocalCopyNeed: MediaItem?
+    /// The qualities the current stream offers, best first. Empty for anything
+    /// that is not an adaptive stream, which has only the one.
+    @Published private(set) var availableRenditions: [StreamRendition] = []
+    /// The height the viewer pinned to, or nil while quality is automatic.
+    @Published private(set) var preferredMaximumHeight: Int?
     @Published private(set) var rate: PlaybackRate = .normal
     @Published private(set) var volume: Double = 1
     @Published var repeatMode: RepeatMode = .off
@@ -67,12 +72,14 @@ final class PlaybackController: ObservableObject {
     @Published var errorMessage: String?
 
     private let resumeStoreKey = "cinema-player.resume-positions.v1"
+    private let qualityStoreKey = "cinema-player.preferred-max-height.v1"
     private var timeObserver: Any?
     private var activeScopedURL: URL?
     private var statusObserver: NSKeyValueObservation?
     private var timeControlObserver: NSKeyValueObservation?
     private var presentationSizeObserver: NSKeyValueObservation?
     private var downloadTask: Task<Void, Never>?
+    private var renditionTask: Task<Void, Never>?
     private var didRetryWithLocalCopy = false
     private var failureObserver: AnyCancellable?
     private var resumePositions: [UUID: Double] = [:]
@@ -87,6 +94,7 @@ final class PlaybackController: ObservableObject {
 
     init() {
         loadResumePositions()
+        preferredMaximumHeight = UserDefaults.standard.object(forKey: qualityStoreKey) as? Int
         player.appliesMediaSelectionCriteriaAutomatically = false
         observeBuffering()
         timeObserver = player.addPeriodicTimeObserver(
@@ -144,6 +152,68 @@ final class PlaybackController: ObservableObject {
         }
     }
 
+    /// Caps the quality the player may choose. `nil` hands the decision back to
+    /// AVFoundation, which is what most viewers want most of the time.
+    func setPreferredMaximumHeight(_ height: Int?) {
+        preferredMaximumHeight = height
+        if let height {
+            UserDefaults.standard.set(height, forKey: qualityStoreKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: qualityStoreKey)
+        }
+
+        guard let item = player.currentItem else { return }
+        applyPreferredQuality(to: item)
+    }
+
+    var preferredQualityTitle: String {
+        guard let preferredMaximumHeight else { return "Auto" }
+
+        return availableRenditions.first { $0.height == preferredMaximumHeight }?.title
+            ?? "\(preferredMaximumHeight)p"
+    }
+
+    /// A cap, not a fixed choice: the player still drops lower when the network
+    /// cannot keep up, which is the behaviour people expect from a quality menu.
+    private func applyPreferredQuality(to item: AVPlayerItem) {
+        guard let height = preferredMaximumHeight,
+              let match = bestRendition(atOrBelow: height) else {
+            item.preferredMaximumResolution = .zero
+            item.preferredPeakBitRate = 0
+            return
+        }
+
+        item.preferredMaximumResolution = match.size
+        item.preferredPeakBitRate = 0
+    }
+
+    private func bestRendition(atOrBelow height: Int) -> StreamRendition? {
+        availableRenditions.first { $0.height <= height } ?? availableRenditions.last
+    }
+
+    /// Reads the qualities a master playlist offers. Only an adaptive stream
+    /// has more than one, so nothing else is asked for.
+    private func loadRenditions(for item: MediaItem, playing url: URL) {
+        renditionTask?.cancel()
+        availableRenditions = []
+
+        guard !url.isFileURL,
+              StreamSupport.playlistExtensions.contains(url.pathExtension.lowercased()) else {
+            return
+        }
+
+        renditionTask = Task { [weak self] in
+            guard let manifest = try? await StreamHTTP.manifest(at: url) else { return }
+            let renditions = StreamSupport.manifestRenditions(in: manifest)
+
+            guard let self, !Task.isCancelled, self.currentItem?.id == item.id, renditions.count > 1 else { return }
+            self.availableRenditions = renditions
+            if let playerItem = self.player.currentItem {
+                self.applyPreferredQuality(to: playerItem)
+            }
+        }
+    }
+
     func cancelDownload() {
         downloadTask?.cancel()
         downloadTask = nil
@@ -158,6 +228,8 @@ final class PlaybackController: ObservableObject {
         }
 
         let playerItem = AVPlayerItem(url: url)
+        applyPreferredQuality(to: playerItem)
+        loadRenditions(for: item, playing: url)
         observeStatus(of: playerItem)
         observeEnd(of: playerItem)
         observeFailure(of: playerItem)
@@ -174,6 +246,7 @@ final class PlaybackController: ObservableObject {
         duration = 0
         isLive = false
         presentedResolution = nil
+        availableRenditions = []
         errorMessage = nil
         pendingStartTime = resumeTime(for: item)
         lastPersistedSecond = -1

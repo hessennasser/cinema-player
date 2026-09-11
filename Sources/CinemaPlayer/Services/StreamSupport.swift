@@ -85,34 +85,57 @@ enum StreamSupport {
     /// rendition the viewer could ever see.
     private static let videoCodecPrefixes = ["avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe", "av01", "vp08", "vp09"]
 
-    /// The highest `RESOLUTION` a master playlist advertises. AVFoundation
-    /// exposes no tracks for an HLS asset, so the manifest is the only place a
-    /// size can be read before playback — but this is the ceiling on offer, not
-    /// what the viewer will get, so label it as such.
-    static func highestManifestResolution(in manifest: String) -> CGSize? {
-        var best: CGSize?
+    /// Every quality a master playlist advertises, best first and one entry per
+    /// resolution. AVFoundation exposes no tracks for an HLS asset, so the
+    /// manifest is the only place these can be read.
+    static func manifestRenditions(in manifest: String) -> [StreamRendition] {
+        var byHeight: [Int: StreamRendition] = [:]
 
         for line in manifest.split(whereSeparator: \.isNewline) {
             // #EXT-X-I-FRAME-STREAM-INF carries a RESOLUTION too, but it is a
             // trick-play track and never a rendition anyone watches.
-            guard line.hasPrefix("#EXT-X-STREAM-INF:") else { continue }
-            guard let range = line.range(of: "RESOLUTION=") else { continue }
-            guard describesVideo(line) else { continue }
+            guard line.hasPrefix("#EXT-X-STREAM-INF:"), describesVideo(line) else { continue }
+            guard let size = resolution(in: line) else { continue }
 
-            let value = line[range.upperBound...].prefix { !$0.isWhitespace && $0 != "," }
-            let dimensions = value.split(separator: "x")
-            guard dimensions.count == 2,
-                  let width = Double(dimensions[0]),
-                  let height = Double(dimensions[1]),
-                  width > 0, height > 0 else {
+            let rendition = StreamRendition(size: size, peakBitRate: bandwidth(in: line))
+            // Several variants can share a resolution; keep the richest one so
+            // pinning to it does not cap the bitrate below what is on offer.
+            if let existing = byHeight[rendition.height],
+               (existing.peakBitRate ?? 0) >= (rendition.peakBitRate ?? 0) {
                 continue
             }
-
-            if width * height > (best.map { $0.width * $0.height } ?? 0) {
-                best = CGSize(width: width, height: height)
-            }
+            byHeight[rendition.height] = rendition
         }
-        return best
+
+        return byHeight.values.sorted { $0.height > $1.height }
+    }
+
+    /// The ceiling on offer, which is not what the viewer is necessarily served.
+    static func highestManifestResolution(in manifest: String) -> CGSize? {
+        manifestRenditions(in: manifest).first?.size
+    }
+
+    private static func resolution(in line: Substring) -> CGSize? {
+        guard let range = line.range(of: "RESOLUTION=") else { return nil }
+
+        let value = line[range.upperBound...].prefix { !$0.isWhitespace && $0 != "," }
+        let dimensions = value.split(separator: "x")
+        guard dimensions.count == 2,
+              let width = Double(dimensions[0]),
+              let height = Double(dimensions[1]),
+              width > 0, height > 0 else {
+            return nil
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    private static func bandwidth(in line: Substring) -> Double? {
+        // AVERAGE-BANDWIDTH would understate a variable-rate rendition.
+        guard let range = line.range(of: "\nBANDWIDTH=") ?? line.range(of: ",BANDWIDTH=") ?? line.range(of: ":BANDWIDTH=") else {
+            return nil
+        }
+        let value = line[range.upperBound...].prefix { $0.isNumber }
+        return Double(value)
     }
 
     private static func describesVideo(_ line: Substring) -> Bool {

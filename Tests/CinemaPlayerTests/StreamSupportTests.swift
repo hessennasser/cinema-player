@@ -102,6 +102,57 @@ final class StreamSupportTests: XCTestCase {
         )
     }
 
+    func testListsEveryQualityBestFirstWithOneEntryPerResolution() {
+        let manifest = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=2227464,CODECS="avc1.640020,mp4a.40.2",RESOLUTION=960x540
+        mid.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=8178040,CODECS="avc1.64002a,mp4a.40.2",RESOLUTION=1920x1080
+        high.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=6453202,CODECS="avc1.64002a,mp4a.40.2",RESOLUTION=1920x1080
+        high-alt.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.640015,mp4a.40.2",RESOLUTION=640x360
+        low.m3u8
+        """
+        let renditions = StreamSupport.manifestRenditions(in: manifest)
+
+        XCTAssertEqual(renditions.map(\.title), ["1080p", "540p", "360p"])
+        XCTAssertEqual(renditions.map(\.height), [1_080, 540, 360])
+        XCTAssertEqual(
+            renditions.first?.peakBitRate,
+            8_178_040,
+            "the richest variant of a shared resolution wins, so pinning does not cap the bitrate"
+        )
+    }
+
+    func testRenditionsCarryReadableTitles() {
+        let manifest = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640020",RESOLUTION=3840x2160
+        a.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640020",RESOLUTION=2560x1440
+        b.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640020",RESOLUTION=1280x720
+        c.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640020",RESOLUTION=854x480
+        d.m3u8
+        """
+        XCTAssertEqual(
+            StreamSupport.manifestRenditions(in: manifest).map(\.title),
+            ["2160p (4K)", "1440p", "720p", "480p"]
+        )
+    }
+
+    func testAProgressiveOrSingleRenditionStreamOffersNoChoice() {
+        let mediaPlaylist = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:6
+        #EXTINF:6.0,
+        segment0.ts
+        """
+        XCTAssertTrue(StreamSupport.manifestRenditions(in: mediaPlaylist).isEmpty)
+    }
+
     func testAdvertisedResolutionIsLabelledAsACeiling() {
         let size = CGSize(width: 1_920, height: 1_080)
         XCTAssertEqual(StreamSupport.resolutionLabel(for: size), "1920 × 1080")
