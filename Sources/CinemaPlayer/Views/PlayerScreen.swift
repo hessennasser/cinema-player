@@ -175,6 +175,11 @@ struct PlayerScreen: View {
             .foregroundStyle(.white.opacity(0.9))
 
             HStack(spacing: 12) {
+                ControlIconButton(icon: "backward.end.fill", label: "Previous video") {
+                    playback.playPrevious()
+                }
+                .disabled(!playback.canAdvance)
+
                 ControlIconButton(icon: "gobackward.10", label: "Back 10 seconds") {
                     playback.skip(by: -10)
                 }
@@ -191,7 +196,29 @@ struct PlayerScreen: View {
                     playback.skip(by: 10)
                 }
 
+                ControlIconButton(icon: "forward.end.fill", label: "Next video") {
+                    playback.playNext()
+                }
+                .disabled(!playback.canAdvance)
+
                 Spacer(minLength: 8)
+
+                ControlIconButton(
+                    icon: "shuffle",
+                    label: playback.isShuffling ? "Shuffle on" : "Shuffle off",
+                    isActive: playback.isShuffling
+                ) {
+                    playback.toggleShuffle()
+                }
+                .disabled(!playback.canAdvance)
+
+                ControlIconButton(
+                    icon: playback.repeatMode.icon,
+                    label: playback.repeatMode.title,
+                    isActive: playback.repeatMode != .off
+                ) {
+                    playback.cycleRepeatMode()
+                }
 
                 Menu {
                     ForEach(PlaybackRate.allCases) { rate in
@@ -351,6 +378,7 @@ private struct ControlIconButton: View {
     let icon: String
     let label: String
     var prominent = false
+    var isActive = false
     let action: () -> Void
 
     var body: some View {
@@ -358,7 +386,7 @@ private struct ControlIconButton: View {
             Image(systemName: icon)
                 .font(prominent ? .title3.weight(.bold) : .body.weight(.semibold))
                 .frame(width: prominent ? 44 : 30, height: prominent ? 44 : 30)
-                .foregroundStyle(.white)
+                .foregroundStyle(isActive ? CinemaTheme.electricBlue : .white)
                 .background {
                     if prominent {
                         Circle().fill(CinemaTheme.accentGradient)

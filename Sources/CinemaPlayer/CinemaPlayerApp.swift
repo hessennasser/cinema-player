@@ -57,6 +57,20 @@ struct CinemaPlayerApp: App {
 
                 Divider()
 
+                Button("Next Video") {
+                    playback.playNext()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(playback.currentItem == nil)
+
+                Button("Previous Video") {
+                    playback.playPrevious()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(playback.currentItem == nil)
+
+                Divider()
+
                 Menu("Playback Speed") {
                     ForEach(PlaybackRate.allCases) { rate in
                         Button(rate.title) {
