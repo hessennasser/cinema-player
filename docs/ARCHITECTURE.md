@@ -11,7 +11,24 @@ Sources/CinemaPlayer/
 ```
 
 - **Models** contain plain values with no UI dependency.
-- **Services** own long-lived state and native framework integration. `MediaLibrary` stores security-scoped bookmarks; `PlaybackController` owns the `AVPlayer` and resume position. `StreamSupport` is the single place that decides whether an address can be handed to `AVPlayer`, so a `MediaItem` is either a bookmarked file or a plain `http`/`https` URL and the rest of the app branches on `MediaItem.isRemote`. `PageVideoResolver` sits in front of that: it asks the host what a link actually is and, when the answer is a web page, reads the video the page advertises, so its parsing stays pure and testable while the network work is confined to a few small functions.
+- **Services** own long-lived state and native framework integration.
 - **Views** compose the interface. `NativePlayerView` and `MouseActivityTrackingView` are minimal AppKit bridges isolated from playback logic.
+
+`MediaLibrary` stores security-scoped bookmarks and `PlaybackController` owns the `AVPlayer`, the resume position, and the streaming-quality cap.
+
+## Opening a link
+
+A `MediaItem` is either a bookmarked local file or a plain `http`/`https` URL, and the rest of the app branches on `MediaItem.isRemote`. Four services turn a pasted address into something `AVPlayer` can open, each with one job:
+
+| Service | Responsibility |
+| --- | --- |
+| `StreamAddressPolicy` | Decides whether an address may be fetched at all. Refuses loopback, private, link-local and multicast addresses in both families, resolving a host name so a public name pointing inward is caught. |
+| `StreamHTTP` | Every network read. Caps bodies and redirects, re-applies the address policy to each hop, and answers what a link *is* — `HEAD` first, a ranged `GET` when that is refused, and the leading bytes when the declared type is not to be trusted. |
+| `PageVideoResolver` | Turns a link into a `ResolvedVideo`. Pure extraction (JSON-LD, Open Graph, `<video>`/`<source>`, `<base href>`) is separated from the fetching, so the parsing is testable without a network. |
+| `StreamCache` | Keeps a local copy of a video whose host ignores `Range`. `AVPlayer` cannot reach a trailing `moov` atom on such a host, so fetching first is the only way to watch it. |
+
+`StreamSupport` holds the shared vocabulary these use: what counts as a streamable address, which content types are media, and what an HLS master playlist offers — including the rungs behind the quality menu.
+
+## Dependencies
 
 The project intentionally uses only Apple frameworks. A future contributor can add subtitles, media session controls, or richer metadata without replacing the app’s core layers.
