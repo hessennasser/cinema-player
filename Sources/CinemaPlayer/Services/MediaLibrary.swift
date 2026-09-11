@@ -31,6 +31,25 @@ final class MediaLibrary: ObservableObject {
         }
     }
 
+    func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a folder to add"
+        panel.message = "Cinema Player scans the folder you choose for videos."
+        panel.prompt = "Add Folder"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+
+        guard panel.runModal() == .OK else { return }
+
+        let videoURLs = panel.urls.flatMap(MediaFileSupport.videoFiles(in:))
+        guard !videoURLs.isEmpty else {
+            errorMessage = "Cinema Player found no supported videos in that folder."
+            return
+        }
+        add(urls: videoURLs)
+    }
+
     func add(urls: [URL]) {
         let newItems = urls.compactMap(makeItem)
         let knownLocations = Set(items.map(\.url.standardizedFileURL))

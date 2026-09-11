@@ -15,4 +15,18 @@ enum MediaFileSupport {
     static var openPanelTypes: [UTType] {
         [.movie, .video, .mpeg4Movie, .quickTimeMovie]
     }
+
+    static func videoFiles(in directory: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        return enumerator
+            .compactMap { $0 as? URL }
+            .filter(isSupported)
+    }
 }

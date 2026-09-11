@@ -101,14 +101,27 @@ struct ContentView: View {
                 }
             }
 
-            Button(action: library.chooseVideos) {
-                Label("Add videos", systemImage: "plus")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+            HStack(spacing: 8) {
+                Button(action: library.chooseVideos) {
+                    Label("Add videos", systemImage: "plus")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(CinemaTheme.electricBlue)
+
+                Button(action: library.chooseFolder) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.headline)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 4)
+                }
+                .buttonStyle(.bordered)
+                .tint(CinemaTheme.electricBlue)
+                .help("Add a folder of videos")
+                .accessibilityLabel("Add a folder of videos")
             }
-            .buttonStyle(.borderedProminent)
-            .tint(CinemaTheme.electricBlue)
 
             VStack(spacing: 5) {
                 ForEach(LibraryScope.allCases) { option in
