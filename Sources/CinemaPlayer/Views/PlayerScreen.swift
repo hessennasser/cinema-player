@@ -223,6 +223,10 @@ struct PlayerScreen: View {
 
                 subtitleMenu
 
+                if playback.audioTracks.count > 1 {
+                    audioMenu
+                }
+
                 ControlIconButton(
                     icon: playback.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill",
                     label: playback.volume == 0 ? "Unmute" : "Mute"
@@ -314,6 +318,27 @@ struct PlayerScreen: View {
         .menuStyle(.borderlessButton)
         .help("Subtitles")
         .accessibilityLabel("Subtitles")
+    }
+
+    private var audioMenu: some View {
+        Menu {
+            ForEach(playback.audioTracks) { track in
+                Button {
+                    playback.selectAudioTrack(id: track.id)
+                } label: {
+                    Label(
+                        track.title,
+                        systemImage: playback.selectedAudioTrackID == track.id ? "checkmark" : "waveform"
+                    )
+                }
+            }
+        } label: {
+            Image(systemName: "waveform")
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Audio track")
+        .accessibilityLabel("Audio track")
     }
 
     private var subtitleIcon: String {
