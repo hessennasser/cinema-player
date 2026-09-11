@@ -49,12 +49,20 @@ struct ContentView: View {
             }
         }
         .tint(CinemaTheme.electricBlue)
+        .onAppear { playback.setPlaylist(visibleItems) }
+        .onChange(of: visibleItems.map(\.id)) { _, _ in
+            playback.setPlaylist(visibleItems)
+        }
         .onChange(of: selection) { _, selectedID in
             guard let selectedID,
-                  let selectedItem = library.items.first(where: { $0.id == selectedID }) else {
+                  let selectedItem = library.items.first(where: { $0.id == selectedID }),
+                  selectedItem.id != playback.currentItem?.id else {
                 return
             }
             playback.play(selectedItem)
+        }
+        .onChange(of: playback.currentItem?.id) { _, newID in
+            if let newID { selection = newID }
         }
         .alert("Cinema Player", isPresented: Binding(
             get: { library.errorMessage != nil || playback.errorMessage != nil || subtitles.errorMessage != nil },

@@ -16,6 +16,29 @@ enum PlaybackRate: Double, CaseIterable, Identifiable {
     }
 }
 
+enum RepeatMode: String, CaseIterable, Identifiable {
+    case off
+    case one
+    case all
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: "Repeat off"
+        case .one: "Repeat one"
+        case .all: "Repeat all"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .off, .all: "repeat"
+        case .one: "repeat.1"
+        }
+    }
+}
+
 @MainActor
 final class PlaybackController: ObservableObject {
     let player = AVPlayer()
@@ -26,6 +49,8 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var rate: PlaybackRate = .normal
     @Published private(set) var volume: Double = 1
+    @Published var repeatMode: RepeatMode = .off
+    @Published private(set) var isShuffling = false
     @Published private(set) var embeddedSubtitleTracks: [EmbeddedSubtitleTrack] = []
     @Published private(set) var selectedEmbeddedSubtitleID: String?
     @Published var errorMessage: String?
@@ -36,6 +61,8 @@ final class PlaybackController: ObservableObject {
     private var statusObserver: NSKeyValueObservation?
     private var resumePositions: [UUID: Double] = [:]
     private var pendingStartTime: Double = 0
+    private var playlist: [MediaItem] = []
+    private var endObserver: NSObjectProtocol?
     private var lastPersistedSecond = -1
     private var legibleGroup: AVMediaSelectionGroup?
     private var legibleOptionsByID: [String: AVMediaSelectionOption] = [:]
@@ -50,6 +77,12 @@ final class PlaybackController: ObservableObject {
             Task { @MainActor in
                 self?.updateProgress(with: time)
             }
+        }
+    }
+
+    deinit {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
         }
     }
 
@@ -73,8 +106,89 @@ final class PlaybackController: ObservableObject {
 
         let playerItem = AVPlayerItem(url: item.url)
         observeStatus(of: playerItem)
+        observeEnd(of: playerItem)
         player.replaceCurrentItem(with: playerItem)
         isPlaying = false
+    }
+
+    func setPlaylist(_ items: [MediaItem]) {
+        playlist = items
+    }
+
+    var canAdvance: Bool {
+        playlist.count > 1
+    }
+
+    func toggleShuffle() {
+        isShuffling.toggle()
+    }
+
+    func cycleRepeatMode() {
+        switch repeatMode {
+        case .off: repeatMode = .all
+        case .all: repeatMode = .one
+        case .one: repeatMode = .off
+        }
+    }
+
+    func playNext() {
+        advance(by: 1, auto: false)
+    }
+
+    func playPrevious() {
+        advance(by: -1, auto: false)
+    }
+
+    private func advance(by direction: Int, auto: Bool) {
+        guard !playlist.isEmpty else { return }
+
+        guard let current = currentItem,
+              let index = playlist.firstIndex(where: { $0.id == current.id }) else {
+            if !auto, let first = playlist.first { play(first) }
+            return
+        }
+
+        if isShuffling, playlist.count > 1 {
+            var nextIndex = index
+            while nextIndex == index {
+                nextIndex = Int.random(in: 0..<playlist.count)
+            }
+            play(playlist[nextIndex])
+            return
+        }
+
+        let target = index + direction
+        if playlist.indices.contains(target) {
+            play(playlist[target])
+        } else if repeatMode == .all || !auto {
+            let wrapped = (target % playlist.count + playlist.count) % playlist.count
+            play(playlist[wrapped])
+        }
+    }
+
+    private func observeEnd(of item: AVPlayerItem) {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+        }
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handlePlaybackEnd()
+            }
+        }
+    }
+
+    private func handlePlaybackEnd() {
+        if repeatMode == .one {
+            seek(to: 0)
+            player.playImmediately(atRate: Float(rate.rawValue))
+            isPlaying = true
+            return
+        }
+        advance(by: 1, auto: true)
     }
 
     func resumeTime(for item: MediaItem) -> Double {
