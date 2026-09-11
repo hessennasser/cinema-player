@@ -149,6 +149,11 @@ struct PlayerScreen: View {
                     Text(presentation?.detailLine ?? "Loading video details…")
                         .font(.caption)
                         .foregroundStyle(CinemaTheme.quietText)
+                    if item.isRemote, let streaming = playback.presentedResolution {
+                        Text("Streaming at \(streaming)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(CinemaTheme.electricBlue)
+                    }
                 }
                 Spacer(minLength: 0)
                 if playback.hasResumePoint(for: item) {

@@ -67,7 +67,7 @@ struct ContentView: View {
             if let newID { selection = newID }
         }
         .sheet(isPresented: $library.isPresentingStreamPrompt) {
-            AddStreamSheet(add: library.addStream(from:))
+            AddStreamSheet { try await library.addStream(from: $0) }
         }
         .alert("Cinema Player", isPresented: Binding(
             get: { library.errorMessage != nil || playback.errorMessage != nil || subtitles.errorMessage != nil },
@@ -280,31 +280,45 @@ struct ContentView: View {
         guard !providers.isEmpty else { return false }
 
         Task { @MainActor in
-            var urls: [URL] = []
+            var files: [URL] = []
+            var links: [URL] = []
+
             for provider in providers {
-                urls.append(contentsOf: await videoURLs(from: provider))
+                let (droppedFiles, droppedLinks) = await videoURLs(from: provider)
+                files.append(contentsOf: droppedFiles)
+                links.append(contentsOf: droppedLinks)
             }
-            if !urls.isEmpty {
-                library.add(urls: urls)
+
+            if !files.isEmpty {
+                library.add(urls: files)
+            }
+            // A dropped link may point at a page rather than the video itself,
+            // so it goes through the same resolution as a pasted one.
+            for link in links {
+                do {
+                    try await library.addStream(from: link.absoluteString)
+                } catch {
+                    library.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
             }
         }
         return true
     }
 
     /// A drop can carry a file, a web link, or plain text holding an address.
-    private func videoURLs(from provider: NSItemProvider) async -> [URL] {
+    private func videoURLs(from provider: NSItemProvider) async -> (files: [URL], links: [URL]) {
         if let url = await loadURL(from: provider) {
             if url.isFileURL {
-                return supportedVideos(at: url)
+                return (supportedVideos(at: url), [])
             }
-            return StreamSupport.isStreamable(url) ? [url] : []
+            return ([], StreamSupport.isStreamable(url) ? [url] : [])
         }
 
         guard let text = await loadText(from: provider),
               let url = StreamSupport.streamURL(from: text) else {
-            return []
+            return ([], [])
         }
-        return [url]
+        return ([], [url])
     }
 
     private func loadURL(from provider: NSItemProvider) async -> URL? {

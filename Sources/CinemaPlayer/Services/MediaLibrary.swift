@@ -56,17 +56,23 @@ final class MediaLibrary: ObservableObject {
         isPresentingStreamPrompt = true
     }
 
-    /// Adds a video that lives behind a link rather than on this Mac.
-    func addStream(from text: String) {
+    /// Adds a video that lives behind a link rather than on this Mac. A link to
+    /// a web page is read for the video the page advertises, so the address bar
+    /// of an ordinary site works as well as a link to the file itself.
+    func addStream(from text: String) async throws {
         guard let url = StreamSupport.streamURL(from: text) else {
-            errorMessage = "That does not look like a video link. Paste an address that starts with http:// or https://."
-            return
+            throw StreamLinkError.notAnAddress
         }
-        add(urls: [url])
+
+        let resolved = try await PageVideoResolver.resolve(url)
+        insert([MediaItem(title: resolved.title, url: resolved.url, bookmarkData: nil)])
     }
 
     func add(urls: [URL]) {
-        let newItems = urls.compactMap(makeItem)
+        insert(urls.compactMap(makeItem))
+    }
+
+    private func insert(_ newItems: [MediaItem]) {
         let knownLocations = Set(items.map { libraryKey(for: $0.url) })
         let uniqueItems = newItems.filter { !knownLocations.contains(libraryKey(for: $0.url)) }
 

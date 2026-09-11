@@ -36,14 +36,39 @@ enum VideoPresentationLoader {
             await makeStreamThumbnail(from: asset)
         }
 
+        // AVFoundation exposes no tracks for an HLS asset, so its size has to
+        // come from the playlist the server sent.
+        var resolution = details?.resolution
+        if resolution == nil {
+            resolution = await manifestResolution(at: url)
+        }
+
         return VideoPresentation(
             thumbnail: thumbnail.flatMap { $0 },
             duration: details?.duration,
-            resolution: details?.resolution,
+            resolution: resolution,
             fileSize: nil,
             format: StreamSupport.formatLabel(for: url),
             isStream: true
         )
+    }
+
+    private static func manifestResolution(at url: URL) async -> String? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = streamTimeout
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"),
+              StreamSupport.isMediaContentType(contentType, at: url) else {
+            return nil
+        }
+
+        let manifest = String(decoding: data.prefix(1_024 * 1_024), as: UTF8.self)
+        guard manifest.hasPrefix("#EXTM3U"),
+              let size = StreamSupport.highestManifestResolution(in: manifest) else {
+            return nil
+        }
+        return StreamSupport.resolutionLabel(for: size)
     }
 
     private static func makeThumbnail(for url: URL) async -> NSImage? {

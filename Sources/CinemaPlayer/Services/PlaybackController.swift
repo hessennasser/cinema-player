@@ -49,6 +49,9 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
     @Published private(set) var isLive = false
+    /// The size actually being decoded, which for an adaptive stream changes as
+    /// the player moves between renditions.
+    @Published private(set) var presentedResolution: String?
     @Published private(set) var rate: PlaybackRate = .normal
     @Published private(set) var volume: Double = 1
     @Published var repeatMode: RepeatMode = .off
@@ -64,6 +67,7 @@ final class PlaybackController: ObservableObject {
     private var activeScopedURL: URL?
     private var statusObserver: NSKeyValueObservation?
     private var timeControlObserver: NSKeyValueObservation?
+    private var presentationSizeObserver: NSKeyValueObservation?
     private var failureObserver: AnyCancellable?
     private var resumePositions: [UUID: Double] = [:]
     private var pendingStartTime: Double = 0
@@ -96,6 +100,7 @@ final class PlaybackController: ObservableObject {
         currentTime = 0
         duration = 0
         isLive = false
+        presentedResolution = nil
         errorMessage = nil
         pendingStartTime = resumeTime(for: item)
         lastPersistedSecond = -1
@@ -116,6 +121,7 @@ final class PlaybackController: ObservableObject {
         observeStatus(of: playerItem)
         observeEnd(of: playerItem)
         observeFailure(of: playerItem)
+        observePresentationSize(of: playerItem)
         player.replaceCurrentItem(with: playerItem)
         isPlaying = false
     }
@@ -298,6 +304,16 @@ final class PlaybackController: ObservableObject {
         timeControlObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, _ in
             Task { @MainActor in
                 self?.isBuffering = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            }
+        }
+    }
+
+    private func observePresentationSize(of item: AVPlayerItem) {
+        presentationSizeObserver = item.observe(\.presentationSize, options: [.initial, .new]) { [weak self] observedItem, _ in
+            let size = observedItem.presentationSize
+            Task { @MainActor in
+                guard size.width > 0, size.height > 0 else { return }
+                self?.presentedResolution = StreamSupport.resolutionLabel(for: size)
             }
         }
     }

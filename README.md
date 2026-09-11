@@ -11,7 +11,9 @@ Cinema Player is an open-source macOS video player built with SwiftUI and AVKit.
 ## What it does
 
 - Imports local video files by open panel, drag-and-drop, or a recursive folder scan, with persistent security-scoped access
-- Plays videos from a direct `http`/`https` link — MP4, MOV, and HLS (`.m3u8`) streams — added with ⌘L, the link button, or by dropping a URL onto the window
+- Plays videos from a link — MP4, MOV, and HLS (`.m3u8`) streams — added with ⌘L, the link button, or by dropping a URL onto the window
+- Accepts the address of a web page too, reading the video the page advertises (`og:video`, `<video>`, `<source>`) instead of only direct file links
+- Says plainly when a link cannot work, naming the site for services that only play inside their own player
 - Shows thumbnails, duration, resolution, file size, and format
 - Remembers where you stopped watching and lets you resume
 - Keeps a searchable library with favorites and recently added titles
