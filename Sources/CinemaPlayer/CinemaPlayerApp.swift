@@ -8,6 +8,7 @@ struct CinemaPlayerApp: App {
     @StateObject private var fullscreen = VideoOnlyFullscreenController()
     @StateObject private var controlsVisibility = PlaybackControlsVisibility()
     @StateObject private var subtitles = SubtitleController()
+    @StateObject private var nowPlaying = NowPlayingController()
 
     var body: some Scene {
         WindowGroup {
@@ -23,6 +24,7 @@ struct CinemaPlayerApp: App {
                         fullscreen: fullscreen,
                         controlsVisibility: controlsVisibility
                     )
+                    nowPlaying.attach(to: playback)
                 }
                 .frame(minWidth: 980, minHeight: 640)
         }
