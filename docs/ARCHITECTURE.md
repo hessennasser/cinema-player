@@ -4,14 +4,14 @@ Cinema Player is a small, native macOS application with deliberately separated l
 
 ```text
 Sources/CinemaPlayer/
-├── Models/       Local media and presentation values
+├── Models/       Media and presentation values, local or remote
 ├── Services/     Library persistence, playback, keyboard and fullscreen state
 ├── Views/        SwiftUI screens and AppKit/AVKit bridges
 └── CinemaPlayerApp.swift
 ```
 
 - **Models** contain plain values with no UI dependency.
-- **Services** own long-lived state and native framework integration. `MediaLibrary` stores security-scoped bookmarks; `PlaybackController` owns the `AVPlayer` and resume position.
+- **Services** own long-lived state and native framework integration. `MediaLibrary` stores security-scoped bookmarks; `PlaybackController` owns the `AVPlayer` and resume position. `StreamSupport` is the single place that decides whether an address can be handed to `AVPlayer`, so a `MediaItem` is either a bookmarked file or a plain `http`/`https` URL and the rest of the app branches on `MediaItem.isRemote`.
 - **Views** compose the interface. `NativePlayerView` and `MouseActivityTrackingView` are minimal AppKit bridges isolated from playback logic.
 
 The project intentionally uses only Apple frameworks. A future contributor can add subtitles, media session controls, or richer metadata without replacing the app’s core layers.

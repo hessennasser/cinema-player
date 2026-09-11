@@ -47,6 +47,8 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var isPlaying = false
+    @Published private(set) var isBuffering = false
+    @Published private(set) var isLive = false
     @Published private(set) var rate: PlaybackRate = .normal
     @Published private(set) var volume: Double = 1
     @Published var repeatMode: RepeatMode = .off
@@ -61,6 +63,8 @@ final class PlaybackController: ObservableObject {
     private var timeObserver: Any?
     private var activeScopedURL: URL?
     private var statusObserver: NSKeyValueObservation?
+    private var timeControlObserver: NSKeyValueObservation?
+    private var failureObserver: AnyCancellable?
     private var resumePositions: [UUID: Double] = [:]
     private var pendingStartTime: Double = 0
     private var playlist: [MediaItem] = []
@@ -74,6 +78,7 @@ final class PlaybackController: ObservableObject {
     init() {
         loadResumePositions()
         player.appliesMediaSelectionCriteriaAutomatically = false
+        observeBuffering()
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
@@ -90,6 +95,7 @@ final class PlaybackController: ObservableObject {
         currentItem = item
         currentTime = 0
         duration = 0
+        isLive = false
         errorMessage = nil
         pendingStartTime = resumeTime(for: item)
         lastPersistedSecond = -1
@@ -102,13 +108,14 @@ final class PlaybackController: ObservableObject {
         audibleGroup = nil
         audibleOptionsByID = [:]
 
-        if item.url.startAccessingSecurityScopedResource() {
+        if item.url.isFileURL, item.url.startAccessingSecurityScopedResource() {
             activeScopedURL = item.url
         }
 
         let playerItem = AVPlayerItem(url: item.url)
         observeStatus(of: playerItem)
         observeEnd(of: playerItem)
+        observeFailure(of: playerItem)
         player.replaceCurrentItem(with: playerItem)
         isPlaying = false
     }
@@ -219,6 +226,8 @@ final class PlaybackController: ObservableObject {
     }
 
     func seek(to seconds: Double) {
+        guard duration > 0 else { return }
+
         let clampedTime = min(max(seconds, 0), duration)
         player.seek(to: CMTime(seconds: clampedTime, preferredTimescale: 600))
     }
@@ -268,11 +277,44 @@ final class PlaybackController: ObservableObject {
 
     private func updateProgress(with time: CMTime) {
         currentTime = max(time.seconds.isFinite ? time.seconds : 0, 0)
-
-        guard let itemDuration = player.currentItem?.duration.seconds, itemDuration.isFinite else { return }
-        duration = max(itemDuration, 0)
         isPlaying = player.rate > 0
+
+        // Live streams report an indefinite duration: there is nothing to
+        // scrub through and no position worth remembering.
+        let itemDuration = player.currentItem?.duration
+        guard let seconds = itemDuration?.seconds, seconds.isFinite else {
+            duration = 0
+            isLive = player.currentItem?.status == .readyToPlay
+            return
+        }
+
+        duration = max(seconds, 0)
+        isLive = false
         saveProgress(for: currentItem)
+    }
+
+    /// Reflects the stall that a remote video hits while it fills its buffer.
+    private func observeBuffering() {
+        timeControlObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, _ in
+            Task { @MainActor in
+                self?.isBuffering = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            }
+        }
+    }
+
+    /// A link can go bad mid-playback, which never happens to a local file.
+    private func observeFailure(of item: AVPlayerItem) {
+        failureObserver = NotificationCenter.default
+            .publisher(for: .AVPlayerItemFailedToPlayToEndTime, object: item)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.isPlaying = false
+                    self.errorMessage = "Playback stopped: \(error?.localizedDescription ?? "the video stream could not be read.")"
+                }
+            }
     }
 
     private func observeStatus(of item: AVPlayerItem) {
@@ -284,7 +326,7 @@ final class PlaybackController: ObservableObject {
                     self?.loadAudioTracks(from: observedItem.asset)
                     self?.startPlaybackWhenReady()
                 case .failed:
-                    let reason = observedItem.error?.localizedDescription ?? "The video codec is not supported by macOS."
+                    let reason = observedItem.error?.localizedDescription ?? self?.defaultFailureReason ?? ""
                     self?.errorMessage = "This video could not be played: \(reason)"
                     self?.isPlaying = false
                 case .unknown:
@@ -294,6 +336,12 @@ final class PlaybackController: ObservableObject {
                 }
             }
         }
+    }
+
+    private var defaultFailureReason: String {
+        currentItem?.isRemote == true
+            ? "the link is unreachable or its format is not supported by macOS."
+            : "the video codec is not supported by macOS."
     }
 
     private func stopAccessingCurrentFile() {

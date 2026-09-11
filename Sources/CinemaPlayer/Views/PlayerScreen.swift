@@ -63,6 +63,7 @@ struct PlayerScreen: View {
             subtitles.clear()
         }
         .animation(.easeOut(duration: 0.18), value: controlsVisibility.isVisible)
+        .animation(.easeOut(duration: 0.18), value: playback.isBuffering)
     }
 
     private var playerStage: some View {
@@ -71,6 +72,21 @@ struct PlayerScreen: View {
             NativePlayerView(player: playback.player, videoGravity: videoLayout.gravity)
             MouseActivityTrackingView {
                 controlsVisibility.revealTemporarily()
+            }
+
+            if playback.isBuffering {
+                VStack(spacing: 11) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                    Text("Buffering…")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .padding(22)
+                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
             if let cue = subtitles.activeCue {
@@ -168,8 +184,16 @@ struct PlayerScreen: View {
                     in: 0...max(playback.duration, 1)
                 )
                 .tint(CinemaTheme.electricBlue)
-                Text("−\(TimeFormatter.string(for: max(playback.duration - playback.currentTime, 0)))")
-                    .frame(width: 68, alignment: .trailing)
+                .disabled(playback.isLive)
+                if playback.isLive {
+                    Label("LIVE", systemImage: "dot.radiowaves.left.and.right")
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(CinemaTheme.signalRed)
+                        .frame(width: 68, alignment: .trailing)
+                } else {
+                    Text("−\(TimeFormatter.string(for: max(playback.duration - playback.currentTime, 0)))")
+                        .frame(width: 68, alignment: .trailing)
+                }
             }
             .font(.caption.monospacedDigit().weight(.semibold))
             .foregroundStyle(.white.opacity(0.9))
@@ -183,6 +207,7 @@ struct PlayerScreen: View {
                 ControlIconButton(icon: "gobackward.10", label: "Back 10 seconds") {
                     playback.skip(by: -10)
                 }
+                .disabled(playback.isLive)
 
                 ControlIconButton(
                     icon: playback.isPlaying ? "pause.fill" : "play.fill",
@@ -195,6 +220,7 @@ struct PlayerScreen: View {
                 ControlIconButton(icon: "goforward.10", label: "Forward 10 seconds") {
                     playback.skip(by: 10)
                 }
+                .disabled(playback.isLive)
 
                 ControlIconButton(icon: "forward.end.fill", label: "Next video") {
                     playback.playNext()

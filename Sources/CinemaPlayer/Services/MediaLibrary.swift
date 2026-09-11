@@ -6,6 +6,7 @@ final class MediaLibrary: ObservableObject {
     @Published private(set) var items: [MediaItem] = []
     @Published private var presentations: [MediaItem.ID: VideoPresentation] = [:]
     @Published private(set) var favoriteIDs: Set<MediaItem.ID> = []
+    @Published var isPresentingStreamPrompt = false
     @Published var errorMessage: String?
 
     private let persistenceKey = "cinema-player.library.v1"
@@ -50,10 +51,24 @@ final class MediaLibrary: ObservableObject {
         add(urls: videoURLs)
     }
 
+    /// Opens the sheet that accepts a video link.
+    func promptForStream() {
+        isPresentingStreamPrompt = true
+    }
+
+    /// Adds a video that lives behind a link rather than on this Mac.
+    func addStream(from text: String) {
+        guard let url = StreamSupport.streamURL(from: text) else {
+            errorMessage = "That does not look like a video link. Paste an address that starts with http:// or https://."
+            return
+        }
+        add(urls: [url])
+    }
+
     func add(urls: [URL]) {
         let newItems = urls.compactMap(makeItem)
-        let knownLocations = Set(items.map(\.url.standardizedFileURL))
-        let uniqueItems = newItems.filter { !knownLocations.contains($0.url.standardizedFileURL) }
+        let knownLocations = Set(items.map { libraryKey(for: $0.url) })
+        let uniqueItems = newItems.filter { !knownLocations.contains(libraryKey(for: $0.url)) }
 
         guard !uniqueItems.isEmpty else { return }
         items.append(contentsOf: uniqueItems)
@@ -70,10 +85,22 @@ final class MediaLibrary: ObservableObject {
     }
 
     func revealInFinder(_ item: MediaItem) {
+        guard !item.isRemote else { return }
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
+    func copyLink(for item: MediaItem) {
+        guard item.isRemote else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.url.absoluteString, forType: .string)
+    }
+
     func moveToTrash(_ item: MediaItem) {
+        guard !item.isRemote else {
+            errorMessage = "\(item.title) is a link, so there is no file to move to the Trash."
+            return
+        }
+
         let didAccess = item.url.startAccessingSecurityScopedResource()
         defer {
             if didAccess { item.url.stopAccessingSecurityScopedResource() }
@@ -110,7 +137,15 @@ final class MediaLibrary: ObservableObject {
         saveFavorites()
     }
 
+    /// Streams are identified by their full address; files by their path, so
+    /// the same movie reached two ways is still added once.
+    private func libraryKey(for url: URL) -> String {
+        url.isFileURL ? url.standardizedFileURL.path : url.absoluteString
+    }
+
     private func makeItem(from url: URL) -> MediaItem? {
+        guard url.isFileURL else { return makeStreamItem(from: url) }
+
         guard MediaFileSupport.isSupported(url) else {
             errorMessage = "\(url.lastPathComponent) is not a supported video file."
             return nil
@@ -131,6 +166,15 @@ final class MediaLibrary: ObservableObject {
             errorMessage = "Cinema Player could not save access to \(url.lastPathComponent)."
             return nil
         }
+    }
+
+    private func makeStreamItem(from url: URL) -> MediaItem? {
+        guard StreamSupport.isStreamable(url) else {
+            errorMessage = "Cinema Player can only stream http and https links."
+            return nil
+        }
+
+        return MediaItem(title: StreamSupport.title(for: url), url: url, bookmarkData: nil)
     }
 
     private func load() {

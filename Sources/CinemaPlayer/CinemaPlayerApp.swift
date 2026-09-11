@@ -39,6 +39,11 @@ struct CinemaPlayerApp: App {
                     library.chooseFolder()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Button("Open Link…") {
+                    library.promptForStream()
+                }
+                .keyboardShortcut("l", modifiers: .command)
             }
 
             CommandMenu("Playback") {

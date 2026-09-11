@@ -5,7 +5,15 @@ import Foundation
 
 @MainActor
 enum VideoPresentationLoader {
+    /// Remote assets can stall on a slow or dead host, so details are given a
+    /// deadline and the library falls back to what it already knows.
+    private static let streamTimeout: Double = 12
+
     static func load(for url: URL) async -> VideoPresentation {
+        url.isFileURL ? await loadFile(at: url) : await loadStream(at: url)
+    }
+
+    private static func loadFile(at url: URL) async -> VideoPresentation {
         async let thumbnail = makeThumbnail(for: url)
         async let details = readDetails(for: url)
         let (image, mediaDetails) = await (thumbnail, details)
@@ -16,6 +24,25 @@ enum VideoPresentationLoader {
             resolution: mediaDetails.resolution,
             fileSize: mediaDetails.fileSize,
             format: url.pathExtension.uppercased()
+        )
+    }
+
+    private static func loadStream(at url: URL) async -> VideoPresentation {
+        let asset = AVURLAsset(url: url)
+        let details = await withTimeout(seconds: streamTimeout) {
+            await readDetails(of: asset, fileSize: nil)
+        }
+        let thumbnail = await withTimeout(seconds: streamTimeout) {
+            await makeStreamThumbnail(from: asset)
+        }
+
+        return VideoPresentation(
+            thumbnail: thumbnail.flatMap { $0 },
+            duration: details?.duration,
+            resolution: details?.resolution,
+            fileSize: nil,
+            format: StreamSupport.formatLabel(for: url),
+            isStream: true
         )
     }
 
@@ -34,10 +61,27 @@ enum VideoPresentationLoader {
         }
     }
 
+    /// QuickLook only knows about files, so a stream's poster frame is pulled
+    /// out of the asset itself.
+    private static func makeStreamThumbnail(from asset: AVURLAsset) async -> NSImage? {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 270)
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 5, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 5, preferredTimescale: 600)
+
+        guard let (image, _) = try? await generator.image(at: CMTime(seconds: 3, preferredTimescale: 600)) else {
+            return nil
+        }
+        return NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
+    }
+
     private static func readDetails(for url: URL) async -> VideoDetails {
         let asset = AVURLAsset(url: url)
-        let fileSize = fileSizeString(for: url)
+        return await readDetails(of: asset, fileSize: fileSizeString(for: url))
+    }
 
+    private static func readDetails(of asset: AVURLAsset, fileSize: String?) async -> VideoDetails {
         do {
             async let duration = asset.load(.duration)
             let tracks = try await asset.loadTracks(withMediaType: .video)
@@ -61,9 +105,27 @@ enum VideoPresentationLoader {
         }
         return ByteCountFormatter.string(fromByteCount: byteCount.int64Value, countStyle: .file)
     }
+
+    /// Returns nil when `operation` outlives the deadline.
+    private static func withTimeout<Value: Sendable>(
+        seconds: Double,
+        operation: @escaping @Sendable () async -> Value
+    ) async -> Value? {
+        await withTaskGroup(of: Value?.self) { group in
+            group.addTask { await operation() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(seconds))
+                return nil
+            }
+
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
 }
 
-private struct VideoDetails {
+private struct VideoDetails: Sendable {
     let duration: Double?
     let resolution: String?
     let fileSize: String?
