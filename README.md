@@ -10,13 +10,17 @@ Cinema Player is an open-source macOS video player built with SwiftUI and AVKit.
 
 ## What it does
 
-- Imports local video files with persistent, security-scoped access
+- Imports local video files by open panel, drag-and-drop, or a recursive folder scan, with persistent security-scoped access
 - Shows thumbnails, duration, resolution, file size, and format
 - Remembers where you stopped watching and lets you resume
 - Keeps a searchable library with favorites and recently added titles
+- Plays through a playlist with autoplay, next and previous, repeat, and shuffle
 - Provides keyboard controls, 10-second skips, speed, volume, aspect-fit modes, and a clean fullscreen experience
 - Hides player controls when idle and reveals them on mouse movement or keyboard interaction
 - Lets you choose embedded subtitle tracks or load external `.srt` files, with a simple subtitle timing adjustment
+- Switches between embedded audio tracks when a file has more than one
+- Reveals a title in Finder or moves it to the Trash straight from the library
+- Reports to the system Now Playing widget and Control Center and answers the keyboard media keys
 
 ## Download
 
@@ -51,7 +55,7 @@ open "build/Cinema Player.app"
 
 To publish a website edit, run `zsh Scripts/publish-site.sh`.
 
-To build, package, and publish a release (plus the website when needed), use `zsh Scripts/release.sh v0.2.0 --publish-site`. The complete, safe release checklist is in [docs/RELEASING.md](docs/RELEASING.md).
+To build, package, and publish a release (plus the website when needed), use `zsh Scripts/release.sh v0.3.0 --publish-site`. The complete, safe release checklist is in [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Contributing and security
 

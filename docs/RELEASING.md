@@ -5,7 +5,7 @@ Use the release script to create an auditable, repeatable macOS release from the
 ## Before you begin
 
 - Merge the intended pull requests into `main`.
-- Choose a new semantic version, such as `v0.2.0`.
+- Choose a new semantic version, such as `v0.3.0`.
 - Ensure GitHub CLI is authenticated with permission to create releases.
 - Work from macOS, because the app bundle is built and ad-hoc signed locally.
 
@@ -14,7 +14,7 @@ Use the release script to create an auditable, repeatable macOS release from the
 ```sh
 git switch main
 git pull --ff-only origin main
-zsh Scripts/release.sh v0.2.0 --publish-site
+zsh Scripts/release.sh v0.3.0 --publish-site
 ```
 
 The script refuses to run from another branch, with uncommitted changes, if `main` differs from `origin/main`, or when the version/tag already exists. It then runs the test suite, builds the app bundle, packages `Cinema Player.app` as `Cinema-Player-macOS.zip`, creates a GitHub Release, and—when requested—publishes `Website/` to the `gh-pages` branch.
@@ -22,7 +22,7 @@ The script refuses to run from another branch, with uncommitted changes, if `mai
 ## App-only release
 
 ```sh
-zsh Scripts/release.sh v0.2.0
+zsh Scripts/release.sh v0.3.0
 ```
 
 ## Verify and roll back
