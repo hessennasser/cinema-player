@@ -12,6 +12,7 @@ enum StreamLinkError: LocalizedError {
     case notAnAddress
     case unsupportedProvider(String)
     case noVideoOnPage(String)
+    case playerBuiltInJavaScript(String)
     case drmProtected
     case accessExpired
     case http(StreamHTTPError)
@@ -24,6 +25,8 @@ enum StreamLinkError: LocalizedError {
             "Cinema Player does not support \(service) links. Sites like it hand video to their own player, which needs a provider-specific extractor, a signed-in session, or DRM that only that player can open."
         case let .noVideoOnPage(host):
             "That page on \(host) does not expose a video Cinema Player can open. A direct link to the video file or an HLS playlist works."
+        case let .playerBuiltInJavaScript(host):
+            "That page on \(host) points only at an embedded player, not at a video. Pages like it build the real address in JavaScript when the player runs, and Cinema Player reads pages without running their scripts. A direct link to the video file or an HLS playlist works."
         case .drmProtected:
             "That stream is DRM-protected and can only be played by its authorised provider."
         case .accessExpired:
@@ -107,10 +110,14 @@ enum PageVideoResolver {
         // A page often advertises another page — an embedded player, say — so
         // each candidate has to prove it is really media.
         var lastFailure: Error?
+        var sawEmbeddedPage = false
         for candidate in candidates {
             do {
                 let candidateProbe = try await StreamHTTP.probe(candidate)
-                guard candidateProbe.kind == .media else { continue }
+                guard candidateProbe.kind == .media else {
+                    if candidateProbe.kind == .page { sawEmbeddedPage = true }
+                    continue
+                }
 
                 let media = try await resolvedMedia(candidateProbe)
                 return ResolvedVideo(
@@ -127,7 +134,11 @@ enum PageVideoResolver {
         if let drm = lastFailure as? StreamLinkError, case .drmProtected = drm {
             throw drm
         }
-        throw StreamLinkError.noVideoOnPage(host)
+        // The page advertised something, but every candidate was another page —
+        // the signature of a player that assembles its address in script.
+        throw sawEmbeddedPage
+            ? StreamLinkError.playerBuiltInJavaScript(host)
+            : StreamLinkError.noVideoOnPage(host)
     }
 
     /// A playlist whose segments are locked needs a provider's own player.

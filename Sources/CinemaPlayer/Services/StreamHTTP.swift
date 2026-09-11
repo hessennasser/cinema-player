@@ -22,6 +22,7 @@ enum StreamHTTPError: LocalizedError {
     case tooManyRedirects
     case tooLarge
     case status(Int)
+    case botChallenge(String)
     case transport(String)
     case insecure
 
@@ -35,6 +36,8 @@ enum StreamHTTPError: LocalizedError {
             "That page is too large for Cinema Player to read."
         case let .status(code):
             "The host answered \(code)."
+        case let .botChallenge(host):
+            "\(host) is behind a bot check, so Cinema Player never receives the page — only the challenge. Cinema Player does not work around bot protection. Opening the page in a browser and playing from the video's own address may work."
         case let .transport(reason):
             reason
         case .insecure:
@@ -60,8 +63,14 @@ enum StreamHTTP {
     static func probe(_ url: URL) async throws -> LinkProbe {
         try check(url)
 
-        if let head = try? await headProbe(url), head.kind != .unknown {
-            return head
+        if let head = try? await headProbe(url) {
+            // A page has nothing to seek within, so its answer is complete.
+            if head.kind == .page { return head }
+            // For media, only a declared Accept-Ranges settles it. Silence is
+            // not a refusal — plenty of hosts serve ranges without saying so on
+            // HEAD, and treating that as "cannot stream" would download files
+            // that stream perfectly well.
+            if head.kind == .media, head.supportsRanges { return head }
         }
         return try await rangeProbe(url)
     }
@@ -99,7 +108,7 @@ enum StreamHTTP {
 
         let (data, response) = try await send(request)
         guard (200..<300).contains(response.statusCode) else {
-            throw StreamHTTPError.status(response.statusCode)
+            throw challengeError(response, at: url) ?? .status(response.statusCode)
         }
 
         let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
@@ -114,6 +123,20 @@ enum StreamHTTP {
             supportsRanges: honoursRange,
             expectedSize: contentRangeTotal(response) ?? (response.expectedContentLength >= 0 ? response.expectedContentLength : nil)
         )
+    }
+
+    /// Tells a genuine refusal apart from an interstitial demanding the client
+    /// prove it is a browser, so the message can say which it was.
+    static func challengeError(_ response: HTTPURLResponse, at url: URL) -> StreamHTTPError? {
+        guard [403, 429, 503].contains(response.statusCode) else { return nil }
+
+        let markers = ["cf-mitigated", "cf-chl-bypass", "x-datadome", "x-akamai-bot"]
+        let hasMarker = markers.contains { response.value(forHTTPHeaderField: $0) != nil }
+        let server = (response.value(forHTTPHeaderField: "Server") ?? "").lowercased()
+        let isKnownGuard = ["cloudflare", "datadome", "akamaighost", "incapsula"].contains { server.contains($0) }
+
+        guard hasMarker || isKnownGuard else { return nil }
+        return .botChallenge(url.host ?? "That host")
     }
 
     private static func contentRangeTotal(_ response: HTTPURLResponse) -> Int64? {

@@ -128,4 +128,77 @@ final class PageVideoResolverTests: XCTestCase {
         // is read instead of being rejected on the host name alone.
         XCTAssertNil(PageVideoResolver.unsupportedProvider(for: URL(string: "https://vimeo.com/123456")!))
     }
+
+    // MARK: - Resolving against a stubbed host
+
+    private let pageOrigin = URL(string: "https://93.184.216.34/watch")!
+
+    override func tearDown() {
+        StubProtocol.uninstall()
+        super.tearDown()
+    }
+
+    func testReportsAPlayerThatBuildsItsAddressInScript() async {
+        // The page advertises a video, but what it points at is another page —
+        // the shape of a player that assembles the real address at runtime.
+        StubProtocol.install { request in
+            let path = request.url?.path ?? ""
+            let html = path.contains("embed")
+                ? "<html><body><div id=\"player\"></div><script>buildPlayer()</script></body></html>"
+                : "<meta property=\"og:video\" content=\"https://93.184.216.34/embed/9f8a\">"
+            return .init(status: 200, headers: ["Content-Type": "text/html"], body: Data(html.utf8))
+        }
+
+        do {
+            _ = try await PageVideoResolver.resolve(pageOrigin)
+            XCTFail("an embedded player should not resolve")
+        } catch let error as StreamLinkError {
+            guard case .playerBuiltInJavaScript = error else {
+                return XCTFail("expected the script-player reason, got \(error)")
+            }
+            XCTAssertTrue(error.errorDescription?.contains("embedded player") == true)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testAPageAdvertisingNothingReadsDifferentlyFromOneAdvertisingAPlayer() async {
+        StubProtocol.install { _ in
+            .init(status: 200, headers: ["Content-Type": "text/html"], body: Data("<html><body>No video here</body></html>".utf8))
+        }
+
+        do {
+            _ = try await PageVideoResolver.resolve(pageOrigin)
+            XCTFail("an empty page should not resolve")
+        } catch let error as StreamLinkError {
+            guard case .noVideoOnPage = error else {
+                return XCTFail("expected the plain no-video reason, got \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testFollowsAPageThroughToARealVideo() async throws {
+        StubProtocol.install { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix(".mp4") {
+                return .init(
+                    status: 206,
+                    headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-15/1000"],
+                    body: mp4Bytes
+                )
+            }
+            let html = """
+            <head><title>A film</title>
+            <meta property="og:video" content="https://93.184.216.34/media/film.mp4"></head>
+            """
+            return .init(status: 200, headers: ["Content-Type": "text/html"], body: Data(html.utf8))
+        }
+
+        let resolved = try await PageVideoResolver.resolve(pageOrigin)
+        XCTAssertEqual(resolved.url.lastPathComponent, "film.mp4")
+        XCTAssertEqual(resolved.title, "A film")
+        XCTAssertFalse(resolved.needsLocalCopy, "the stub answers 206, so the file streams")
+    }
 }
