@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum LibraryScope: String, CaseIterable, Identifiable {
     case all = "All titles"
@@ -24,6 +25,7 @@ struct ContentView: View {
     @State private var selection: MediaItem.ID?
     @State private var searchText = ""
     @State private var scope: LibraryScope = .all
+    @State private var isDropTargeted = false
 
     private var visibleItems: [MediaItem] {
         let scopedItems: [MediaItem]
@@ -84,6 +86,15 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background(CinemaTheme.night)
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(CinemaTheme.electricBlue, lineWidth: 3)
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var librarySidebar: some View {
@@ -222,6 +233,56 @@ struct ContentView: View {
         } else {
             EmptyPlayerView(addVideos: library.chooseVideos)
         }
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in fileProviders {
+                guard let url = await loadFileURL(from: provider) else { continue }
+                urls.append(contentsOf: supportedVideos(at: url))
+            }
+            if !urls.isEmpty {
+                library.add(urls: urls)
+            }
+        }
+        return true
+    }
+
+    private func loadFileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                continuation.resume(returning: url)
+            }
+        }
+    }
+
+    private func supportedVideos(at url: URL) -> [URL] {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return []
+        }
+
+        guard isDirectory.boolValue else {
+            return MediaFileSupport.isSupported(url) ? [url] : []
+        }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        return enumerator
+            .compactMap { $0 as? URL }
+            .filter(MediaFileSupport.isSupported)
     }
 }
 
