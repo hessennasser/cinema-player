@@ -66,6 +66,10 @@ struct ContentView: View {
         .onChange(of: playback.currentItem?.id) { _, newID in
             if let newID { selection = newID }
         }
+        .onChange(of: playback.discoveredLocalCopyNeed?.id) { _, _ in
+            guard let item = playback.discoveredLocalCopyNeed else { return }
+            library.markNeedsLocalCopy(item)
+        }
         .sheet(isPresented: $library.isPresentingStreamPrompt) {
             AddStreamSheet { try await library.addStream(from: $0) }
         }

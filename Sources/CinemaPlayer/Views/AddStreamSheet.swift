@@ -11,6 +11,7 @@ struct AddStreamSheet: View {
     @State private var address = ""
     @State private var isResolving = false
     @State private var failure: String?
+    @State private var work: Task<Void, Never>?
     @FocusState private var isAddressFocused: Bool
 
     private var isValid: Bool {
@@ -28,7 +29,7 @@ struct AddStreamSheet: View {
                     .foregroundStyle(CinemaTheme.signalRed)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("Paste a video file, an HLS playlist, or the address of a page that hosts a video — Cinema Player will look for the video on it.")
+                Text("Paste a video file, an HLS playlist, or a page that publicly exposes a video. Providers that need their own player, a sign-in, or DRM cannot be opened.")
                     .font(.caption)
                     .foregroundStyle(CinemaTheme.quietText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -41,6 +42,7 @@ struct AddStreamSheet: View {
         .background(CinemaTheme.night)
         .foregroundStyle(.white)
         .onAppear { isAddressFocused = true }
+        .onDisappear { work?.cancel() }
     }
 
     private var header: some View {
@@ -51,7 +53,7 @@ struct AddStreamSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Open a video link")
                     .font(.headline)
-                Text("Play a video from anywhere on the web.")
+                Text("Direct video links, and pages that expose one.")
                     .font(.caption)
                     .foregroundStyle(CinemaTheme.quietText)
             }
@@ -92,9 +94,15 @@ struct AddStreamSheet: View {
                     .foregroundStyle(CinemaTheme.quietText)
             }
             Spacer()
-            Button("Cancel", role: .cancel) { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .disabled(isResolving)
+            Button(isResolving ? "Stop" : "Cancel", role: .cancel) {
+                if isResolving {
+                    work?.cancel()
+                    isResolving = false
+                } else {
+                    dismiss()
+                }
+            }
+            .keyboardShortcut(.cancelAction)
             Button("Add Link", action: submit)
                 .buttonStyle(.borderedProminent)
                 .tint(CinemaTheme.electricBlue)
@@ -108,11 +116,18 @@ struct AddStreamSheet: View {
 
         isResolving = true
         failure = nil
-        Task {
+        // Replaces any check still running, so a corrected address does not
+        // race the one it replaced.
+        work?.cancel()
+        work = Task {
             do {
                 try await add(address)
+                guard !Task.isCancelled else { return }
                 dismiss()
+            } catch is CancellationError {
+                // The sheet closed or another check took over.
             } catch {
+                guard !Task.isCancelled else { return }
                 failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             isResolving = false

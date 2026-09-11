@@ -64,6 +64,7 @@ struct PlayerScreen: View {
         }
         .animation(.easeOut(duration: 0.18), value: controlsVisibility.isVisible)
         .animation(.easeOut(duration: 0.18), value: playback.isBuffering)
+        .animation(.easeOut(duration: 0.18), value: playback.downloadProgress == nil)
     }
 
     private var playerStage: some View {
@@ -74,7 +75,31 @@ struct PlayerScreen: View {
                 controlsVisibility.revealTemporarily()
             }
 
-            if playback.isBuffering {
+            if let fraction = playback.downloadProgress {
+                VStack(spacing: 12) {
+                    Text("Preparing this video")
+                        .font(.headline)
+                    Text("This host will not stream in place, so Cinema Player is fetching the file first.")
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(CinemaTheme.quietText)
+                        .frame(maxWidth: 320)
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .tint(CinemaTheme.electricBlue)
+                        .frame(width: 260)
+                    Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(CinemaTheme.quietText)
+                    Button("Cancel", role: .cancel) { playback.cancelDownload() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                .foregroundStyle(.white)
+                .padding(26)
+                .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .transition(.opacity)
+            } else if playback.isBuffering {
                 VStack(spacing: 11) {
                     ProgressView()
                         .controlSize(.large)

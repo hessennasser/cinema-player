@@ -73,15 +73,50 @@ final class StreamSupportTests: XCTestCase {
         XCTAssertEqual(restored?.id, item.id)
     }
 
+    func testIgnoresTrickPlayTracksWhenReadingAManifest() {
+        // An I-frame playlist carries a RESOLUTION but is never a rendition
+        // anyone watches, so it must not raise the advertised ceiling.
+        let manifest = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=2227464,CODECS="avc1.640020",RESOLUTION=960x540
+        low.m3u8
+        #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=200000,CODECS="avc1.640020",RESOLUTION=3840x2160,URI="iframe.m3u8"
+        """
+        XCTAssertEqual(
+            StreamSupport.highestManifestResolution(in: manifest).map(StreamSupport.resolutionLabel),
+            "960 × 540"
+        )
+    }
+
+    func testIgnoresAudioOnlyVariants() {
+        let manifest = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="mp4a.40.2",RESOLUTION=1920x1080
+        audio.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2227464,CODECS="avc1.640020,mp4a.40.2",RESOLUTION=1280x720
+        video.m3u8
+        """
+        XCTAssertEqual(
+            StreamSupport.highestManifestResolution(in: manifest).map(StreamSupport.resolutionLabel),
+            "1280 × 720"
+        )
+    }
+
+    func testAdvertisedResolutionIsLabelledAsACeiling() {
+        let size = CGSize(width: 1_920, height: 1_080)
+        XCTAssertEqual(StreamSupport.resolutionLabel(for: size), "1920 × 1080")
+        XCTAssertEqual(StreamSupport.advertisedResolutionLabel(for: size), "Up to 1920 × 1080")
+    }
+
     func testStreamPresentationsAreLabelledInTheLibrary() {
         let presentation = VideoPresentation(
             thumbnail: nil,
             duration: 65,
-            resolution: "1920 × 1080",
+            resolution: "Up to 1920 × 1080",
             fileSize: nil,
             format: "HLS",
             isStream: true
         )
-        XCTAssertEqual(presentation.detailLine, "1:05 · 1920 × 1080 · HLS · Stream")
+        XCTAssertEqual(presentation.detailLine, "1:05 · Up to 1920 × 1080 · HLS · Stream")
     }
 }

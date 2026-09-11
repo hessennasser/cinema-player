@@ -6,14 +6,15 @@
 
 <p align="center"><strong>A private, local-first cinema for the videos already on your Mac.</strong></p>
 
-Cinema Player is an open-source macOS video player built with SwiftUI and AVKit. It has no accounts, ads, analytics, or streaming catalogue. You choose what plays — files on your Mac, or a direct video link you paste in yourself — and nothing is sent anywhere else.
+Cinema Player is an open-source macOS video player built with SwiftUI and AVKit. It has no accounts, ads, analytics, or streaming catalogue. You choose what plays — files on your Mac, direct video links, and videos that a web page exposes publicly — and nothing is sent anywhere else.
 
 ## What it does
 
 - Imports local video files by open panel, drag-and-drop, or a recursive folder scan, with persistent security-scoped access
-- Plays videos from a link — MP4, MOV, and HLS (`.m3u8`) streams — added with ⌘L, the link button, or by dropping a URL onto the window
-- Accepts the address of a web page too, reading the video the page advertises (`og:video`, `<video>`, `<source>`) instead of only direct file links
-- Says plainly when a link cannot work, naming the site for services that only play inside their own player
+- Plays direct video links — MP4, MOV, and HLS (`.m3u8`) — added with ⌘L, the link button, or by dropping a URL onto the window
+- Plays videos a web page exposes publicly, reading `og:video`, JSON-LD `contentUrl`, `<video>` and `<source>`; it cannot open providers that need their own extractor, a signed-in session, or DRM
+- Fetches a local copy when a host refuses byte ranges, which is the only way such a video can be watched
+- Refuses links that point at your own machine or local network, and caps what it will download from a page
 - Shows thumbnails, duration, resolution, file size, and format
 - Remembers where you stopped watching and lets you resume
 - Keeps a searchable library with favorites and recently added titles

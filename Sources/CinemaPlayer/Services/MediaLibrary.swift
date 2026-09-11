@@ -65,7 +65,14 @@ final class MediaLibrary: ObservableObject {
         }
 
         let resolved = try await PageVideoResolver.resolve(url)
-        insert([MediaItem(title: resolved.title, url: resolved.url, bookmarkData: nil)])
+        insert([
+            MediaItem(
+                title: resolved.title,
+                url: resolved.url,
+                bookmarkData: nil,
+                needsLocalCopy: resolved.needsLocalCopy
+            ),
+        ])
     }
 
     func add(urls: [URL]) {
@@ -83,7 +90,24 @@ final class MediaLibrary: ObservableObject {
         uniqueItems.forEach(loadPresentation)
     }
 
+    /// Records that a link turned out to need fetching, so the next play goes
+    /// straight to the download instead of failing first.
+    func markNeedsLocalCopy(_ item: MediaItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }), !items[index].needsLocalCopy else { return }
+
+        items[index] = MediaItem(
+            id: item.id,
+            title: item.title,
+            url: item.url,
+            bookmarkData: item.bookmarkData,
+            addedAt: item.addedAt,
+            needsLocalCopy: true
+        )
+        save()
+    }
+
     func remove(_ item: MediaItem) {
+        if item.isRemote { StreamCache.shared.removeCopy(of: item.url) }
         items.removeAll { $0.id == item.id }
         favoriteIDs.remove(item.id)
         save()

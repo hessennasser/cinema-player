@@ -53,22 +53,15 @@ enum VideoPresentationLoader {
         )
     }
 
+    /// The ceiling a master playlist advertises, not a measurement — the label
+    /// says "Up to" so it is never read as the rendition being served.
     private static func manifestResolution(at url: URL) async -> String? {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = streamTimeout
-
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"),
-              StreamSupport.isMediaContentType(contentType, at: url) else {
-            return nil
-        }
-
-        let manifest = String(decoding: data.prefix(1_024 * 1_024), as: UTF8.self)
-        guard manifest.hasPrefix("#EXTM3U"),
+        guard let manifest = try? await StreamHTTP.manifest(at: url),
+              manifest.hasPrefix("#EXTM3U"),
               let size = StreamSupport.highestManifestResolution(in: manifest) else {
             return nil
         }
-        return StreamSupport.resolutionLabel(for: size)
+        return StreamSupport.advertisedResolutionLabel(for: size)
     }
 
     private static func makeThumbnail(for url: URL) async -> NSImage? {

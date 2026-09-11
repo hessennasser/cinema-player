@@ -52,6 +52,10 @@ final class PlaybackController: ObservableObject {
     /// The size actually being decoded, which for an adaptive stream changes as
     /// the player moves between renditions.
     @Published private(set) var presentedResolution: String?
+    /// Non-nil while a link that cannot be streamed is being fetched.
+    @Published private(set) var downloadProgress: Double?
+    /// Set when a link needs fetching, so the library can remember it.
+    @Published private(set) var discoveredLocalCopyNeed: MediaItem?
     @Published private(set) var rate: PlaybackRate = .normal
     @Published private(set) var volume: Double = 1
     @Published var repeatMode: RepeatMode = .off
@@ -68,6 +72,8 @@ final class PlaybackController: ObservableObject {
     private var statusObserver: NSKeyValueObservation?
     private var timeControlObserver: NSKeyValueObservation?
     private var presentationSizeObserver: NSKeyValueObservation?
+    private var downloadTask: Task<Void, Never>?
+    private var didRetryWithLocalCopy = false
     private var failureObserver: AnyCancellable?
     private var resumePositions: [UUID: Double] = [:]
     private var pendingStartTime: Double = 0
@@ -94,6 +100,73 @@ final class PlaybackController: ObservableObject {
     }
 
     func play(_ item: MediaItem) {
+        didRetryWithLocalCopy = false
+        start(item, fromLocalCopy: item.needsLocalCopy)
+    }
+
+    private func start(_ item: MediaItem, fromLocalCopy: Bool) {
+        downloadTask?.cancel()
+        downloadTask = nil
+        downloadProgress = nil
+
+        guard !fromLocalCopy || !item.isRemote else {
+            playFromLocalCopy(item)
+            return
+        }
+        beginPlayback(of: item, at: item.url)
+    }
+
+    /// Fetches the whole file, then plays it from disk. The library item keeps
+    /// its link; the copy is only how it gets watched.
+    private func playFromLocalCopy(_ item: MediaItem) {
+        if let cached = StreamCache.shared.cachedCopy(of: item.url) {
+            beginPlayback(of: item, at: cached)
+            return
+        }
+
+        prepare(for: item)
+        downloadProgress = 0
+        downloadTask = Task { [weak self] in
+            do {
+                let local = try await StreamCache.shared.localCopy(of: item.url) { fraction in
+                    self?.downloadProgress = fraction
+                }
+                guard let self, !Task.isCancelled, self.currentItem?.id == item.id else { return }
+                self.downloadProgress = nil
+                self.beginPlayback(of: item, at: local)
+            } catch is CancellationError {
+                self?.downloadProgress = nil
+            } catch {
+                guard let self, self.currentItem?.id == item.id else { return }
+                self.downloadProgress = nil
+                self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    func cancelDownload() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        downloadProgress = nil
+    }
+
+    private func beginPlayback(of item: MediaItem, at url: URL) {
+        prepare(for: item)
+
+        if url.isFileURL, url.startAccessingSecurityScopedResource() {
+            activeScopedURL = url
+        }
+
+        let playerItem = AVPlayerItem(url: url)
+        observeStatus(of: playerItem)
+        observeEnd(of: playerItem)
+        observeFailure(of: playerItem)
+        observePresentationSize(of: playerItem)
+        player.replaceCurrentItem(with: playerItem)
+        isPlaying = false
+    }
+
+    private func prepare(for item: MediaItem) {
         saveProgress(for: currentItem)
         stopAccessingCurrentFile()
         currentItem = item
@@ -112,18 +185,6 @@ final class PlaybackController: ObservableObject {
         selectedAudioTrackID = nil
         audibleGroup = nil
         audibleOptionsByID = [:]
-
-        if item.url.isFileURL, item.url.startAccessingSecurityScopedResource() {
-            activeScopedURL = item.url
-        }
-
-        let playerItem = AVPlayerItem(url: item.url)
-        observeStatus(of: playerItem)
-        observeEnd(of: playerItem)
-        observeFailure(of: playerItem)
-        observePresentationSize(of: playerItem)
-        player.replaceCurrentItem(with: playerItem)
-        isPlaying = false
     }
 
     func setPlaylist(_ items: [MediaItem]) {
@@ -342,9 +403,11 @@ final class PlaybackController: ObservableObject {
                     self?.loadAudioTracks(from: observedItem.asset)
                     self?.startPlaybackWhenReady()
                 case .failed:
-                    let reason = observedItem.error?.localizedDescription ?? self?.defaultFailureReason ?? ""
-                    self?.errorMessage = "This video could not be played: \(reason)"
-                    self?.isPlaying = false
+                    guard let self else { return }
+                    if self.retryWithLocalCopy() { return }
+                    let reason = observedItem.error?.localizedDescription ?? self.defaultFailureReason
+                    self.errorMessage = "This video could not be played: \(reason)"
+                    self.isPlaying = false
                 case .unknown:
                     break
                 @unknown default:
@@ -352,6 +415,24 @@ final class PlaybackController: ObservableObject {
                 }
             }
         }
+    }
+
+    /// A host that ignores `Range` leaves AVPlayer unable to read a progressive
+    /// file, which surfaces as an opaque failure. Fetching the file instead is
+    /// the only way to watch it, so that is tried once before reporting.
+    private func retryWithLocalCopy() -> Bool {
+        guard let item = currentItem, item.isRemote, !item.needsLocalCopy, !didRetryWithLocalCopy else {
+            return false
+        }
+        guard !StreamSupport.playlistExtensions.contains(item.url.pathExtension.lowercased()) else {
+            return false
+        }
+
+        didRetryWithLocalCopy = true
+        discoveredLocalCopyNeed = item
+        isPlaying = false
+        playFromLocalCopy(item)
+        return true
     }
 
     private var defaultFailureReason: String {

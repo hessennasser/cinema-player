@@ -4,114 +4,128 @@ import XCTest
 final class PageVideoResolverTests: XCTestCase {
     private let pageURL = URL(string: "https://example.com/films/watch")!
 
-    func testPrefersOpenGraphVideoOverAnEmbeddedTag() {
+    private func firstVideo(_ html: String, page: URL? = nil) -> String? {
+        PageVideoResolver.videoURLs(inHTML: html, relativeTo: page ?? pageURL).first?.absoluteString
+    }
+
+    func testPrefersJSONLDThenOpenGraphThenMarkup() {
         let html = """
         <html><head>
-        <meta property="og:video:secure_url" content="https://cdn.example.com/movie.mp4">
-        <meta property="og:video" content="https://cdn.example.com/fallback.mp4">
+        <script type="application/ld+json">{"@type":"VideoObject","contentUrl":"https://cdn.example.com/canonical.mp4"}</script>
+        <meta property="og:video:secure_url" content="https://cdn.example.com/social.mp4">
         </head><body><video src="https://cdn.example.com/inline.mp4"></video></body></html>
         """
         XCTAssertEqual(
-            PageVideoResolver.videoURL(inHTML: html, relativeTo: pageURL)?.absoluteString,
-            "https://cdn.example.com/movie.mp4"
+            PageVideoResolver.videoURLs(inHTML: html, relativeTo: pageURL).map(\.absoluteString),
+            [
+                "https://cdn.example.com/canonical.mp4",
+                "https://cdn.example.com/social.mp4",
+                "https://cdn.example.com/inline.mp4",
+            ]
         )
     }
 
+    func testOpenGraphVariantsAreRankedAmongThemselves() {
+        let html = """
+        <meta property="og:video" content="https://cdn.example.com/plain.mp4">
+        <meta property="og:video:url" content="https://cdn.example.com/url.mp4">
+        <meta property="og:video:secure_url" content="https://cdn.example.com/secure.mp4">
+        """
+        XCTAssertEqual(firstVideo(html), "https://cdn.example.com/secure.mp4")
+    }
+
     func testReadsVideoAndSourceTagsWhenThereIsNoMetadata() {
-        let videoTag = "<body><video controls src=\"/media/movie.mp4\"></video></body>"
         XCTAssertEqual(
-            PageVideoResolver.videoURL(inHTML: videoTag, relativeTo: pageURL)?.absoluteString,
+            firstVideo("<body><video controls src=\"/media/movie.mp4\"></video></body>"),
             "https://example.com/media/movie.mp4"
         )
-
-        let sourceTag = "<body><video><source src=\"stream.m3u8\" type=\"application/x-mpegURL\"></video></body>"
         XCTAssertEqual(
-            PageVideoResolver.videoURL(inHTML: sourceTag, relativeTo: pageURL)?.absoluteString,
+            firstVideo("<body><video><source src=\"stream.m3u8\" type=\"application/x-mpegURL\"></video></body>"),
             "https://example.com/films/stream.m3u8"
         )
     }
 
-    func testResolvesProtocolRelativeAddressesAndDecodesEntities() {
-        let html = #"<meta property="og:video" content="//cdn.example.com/movie.mp4?a=1&amp;b=2">"#
-        XCTAssertEqual(
-            PageVideoResolver.videoURL(inHTML: html, relativeTo: pageURL)?.absoluteString,
-            "https://cdn.example.com/movie.mp4?a=1&b=2"
-        )
+    func testPrefersAFormatAVFoundationCanDecode() {
+        let html = """
+        <video>
+          <source src="/movie.webm" type="video/webm">
+          <source src="/movie.ogv" type="video/ogg">
+          <source src="/movie.mp4" type="video/mp4">
+        </video>
+        """
+        let found = PageVideoResolver.videoURLs(inHTML: html, relativeTo: pageURL).map(\.lastPathComponent)
+        XCTAssertEqual(found.first, "movie.mp4")
+        XCTAssertEqual(found.count, 3, "the others stay as fallbacks")
     }
 
-    func testIgnoresCandidatesThatAreNotStreamable() {
+    func testHonoursBaseHref() {
+        let html = """
+        <head><base href="https://cdn.example.com/assets/"></head>
+        <body><video src="movie.mp4"></video></body>
+        """
+        XCTAssertEqual(firstVideo(html), "https://cdn.example.com/assets/movie.mp4")
+    }
+
+    func testResolvesProtocolRelativeAddressesAndDecodesEntities() {
+        let html = #"<meta property="og:video" content="//cdn.example.com/movie.mp4?a=1&amp;b=2">"#
+        XCTAssertEqual(firstVideo(html), "https://cdn.example.com/movie.mp4?a=1&b=2")
+    }
+
+    func testRemovesDuplicateCandidates() {
+        let html = """
+        <meta property="og:video:secure_url" content="https://cdn.example.com/movie.mp4">
+        <meta property="og:video" content="https://cdn.example.com/movie.mp4">
+        <video src="https://cdn.example.com/movie.mp4"></video>
+        """
+        XCTAssertEqual(PageVideoResolver.videoURLs(inHTML: html, relativeTo: pageURL).count, 1)
+    }
+
+    func testSkipsCandidatesThatAreNotFetchable() {
         let html = """
         <meta property="og:video" content="rtmp://example.com/live">
         <video src="blob:https://example.com/9f8a"></video>
+        <source src="data:video/mp4;base64,AAAA">
+        <source src="http://127.0.0.1:8080/private.mp4">
+        <source src="http://192.168.1.10/nas.mp4">
         """
-        XCTAssertNil(PageVideoResolver.videoURL(inHTML: html, relativeTo: pageURL))
+        XCTAssertTrue(PageVideoResolver.videoURLs(inHTML: html, relativeTo: pageURL).isEmpty)
+    }
+
+    func testSurvivesMalformedMarkupAndJSON() {
+        let html = """
+        <html><head><meta property="og:video" content=
+        <script type="application/ld+json">{"contentUrl": not json</script>
+        <video src=></video><source src="">
+        """
+        XCTAssertTrue(PageVideoResolver.videoURLs(inHTML: html, relativeTo: pageURL).isEmpty)
     }
 
     func testFindsNothingOnAPageWithoutAVideo() {
-        XCTAssertNil(PageVideoResolver.videoURL(inHTML: "<html><body><p>No video</p></body></html>", relativeTo: pageURL))
+        XCTAssertTrue(PageVideoResolver.videoURLs(inHTML: "<html><body><p>No video</p></body></html>", relativeTo: pageURL).isEmpty)
     }
 
     func testTitlePrefersOpenGraphAndFallsBackToTheTitleTag() {
-        let withMeta = "<head><meta property=\"og:title\" content=\"Big Buck Bunny\"><title>ignored</title></head>"
-        XCTAssertEqual(PageVideoResolver.pageTitle(inHTML: withMeta), "Big Buck Bunny")
-
-        let withTitleOnly = "<head><title>  Sintel &amp; Friends  </title></head>"
-        XCTAssertEqual(PageVideoResolver.pageTitle(inHTML: withTitleOnly), "Sintel & Friends")
-
+        XCTAssertEqual(
+            PageVideoResolver.pageTitle(inHTML: "<head><meta property=\"og:title\" content=\"Big Buck Bunny\"><title>ignored</title></head>"),
+            "Big Buck Bunny"
+        )
+        XCTAssertEqual(
+            PageVideoResolver.pageTitle(inHTML: "<head><title>  Sintel &amp; Friends  </title></head>"),
+            "Sintel & Friends"
+        )
         XCTAssertNil(PageVideoResolver.pageTitle(inHTML: "<head></head>"))
     }
 
-    func testNamesSitesWhoseVideoStaysInTheirOwnPlayer() {
-        XCTAssertEqual(PageVideoResolver.playerOnlyService(for: URL(string: "https://www.youtube.com/watch?v=abc")!), "YouTube")
-        XCTAssertEqual(PageVideoResolver.playerOnlyService(for: URL(string: "https://youtu.be/abc")!), "YouTube")
-        XCTAssertEqual(PageVideoResolver.playerOnlyService(for: URL(string: "https://vimeo.com/12345")!), "Vimeo")
-        XCTAssertNil(PageVideoResolver.playerOnlyService(for: URL(string: "https://notyoutube.com/watch")!))
-        XCTAssertNil(PageVideoResolver.playerOnlyService(for: URL(string: "https://cdn.example.com/movie.mp4")!))
-    }
-}
-
-final class StreamContentTypeTests: XCTestCase {
-    private let movieURL = URL(string: "https://example.com/movie.mp4")!
-    private let opaqueURL = URL(string: "https://example.com/watch")!
-
-    func testRecognisesMediaContentTypes() {
-        XCTAssertTrue(StreamSupport.isMediaContentType("video/mp4", at: movieURL))
-        XCTAssertTrue(StreamSupport.isMediaContentType("application/x-mpegURL", at: opaqueURL))
-        XCTAssertTrue(StreamSupport.isMediaContentType("application/vnd.apple.mpegurl; charset=utf-8", at: opaqueURL))
-        XCTAssertFalse(StreamSupport.isMediaContentType("text/html; charset=UTF-8", at: movieURL))
+    func testNamesProvidersItCannotSupport() {
+        XCTAssertEqual(PageVideoResolver.unsupportedProvider(for: URL(string: "https://www.youtube.com/watch?v=abc")!), "YouTube")
+        XCTAssertEqual(PageVideoResolver.unsupportedProvider(for: URL(string: "https://youtu.be/abc")!), "YouTube")
+        XCTAssertNil(PageVideoResolver.unsupportedProvider(for: URL(string: "https://notyoutube.com/watch")!))
+        XCTAssertNil(PageVideoResolver.unsupportedProvider(for: URL(string: "https://cdn.example.com/movie.mp4")!))
     }
 
-    func testTrustsTheExtensionOnlyWhenTheTypeSaysNothing() {
-        XCTAssertTrue(StreamSupport.isMediaContentType("application/octet-stream", at: movieURL))
-        XCTAssertFalse(StreamSupport.isMediaContentType("application/octet-stream", at: opaqueURL))
-    }
-
-    func testRecognisesPages() {
-        XCTAssertTrue(StreamSupport.isPageContentType("text/html; charset=UTF-8"))
-        XCTAssertFalse(StreamSupport.isPageContentType("video/mp4"))
-    }
-
-    func testReadsTheBestResolutionFromAnHLSManifest() {
-        let manifest = """
-        #EXTM3U
-        #EXT-X-STREAM-INF:BANDWIDTH=2227464,CODECS="avc1.640020",RESOLUTION=960x540,FRAME-RATE=60.000
-        low.m3u8
-        #EXT-X-STREAM-INF:BANDWIDTH=8178040,CODECS="avc1.64002a",RESOLUTION=1920x1080,FRAME-RATE=60.000
-        high.m3u8
-        #EXT-X-STREAM-INF:BANDWIDTH=900000,CODECS="mp4a.40.2"
-        audio.m3u8
-        """
-        let size = StreamSupport.highestManifestResolution(in: manifest)
-        XCTAssertEqual(size.map(StreamSupport.resolutionLabel), "1920 × 1080")
-    }
-
-    func testReturnsNoResolutionWhenTheManifestAdvertisesNone() {
-        let manifest = """
-        #EXTM3U
-        #EXT-X-TARGETDURATION:6
-        #EXTINF:6.0,
-        segment0.ts
-        """
-        XCTAssertNil(StreamSupport.highestManifestResolution(in: manifest))
+    func testVimeoIsTriedRatherThanRefusedOutright() {
+        // Some Vimeo pages do expose a progressive or HLS address, so the page
+        // is read instead of being rejected on the host name alone.
+        XCTAssertNil(PageVideoResolver.unsupportedProvider(for: URL(string: "https://vimeo.com/123456")!))
     }
 }

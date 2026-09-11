@@ -3,27 +3,33 @@ import Foundation
 struct ResolvedVideo {
     let url: URL
     let title: String
+    /// True when the host will not serve byte ranges, so AVPlayer cannot stream
+    /// the file and Cinema Player has to fetch a local copy first.
+    let needsLocalCopy: Bool
 }
 
 enum StreamLinkError: LocalizedError {
     case notAnAddress
-    case playerOnlySite(String)
-    case unreachable(String)
-    case insecurePage
+    case unsupportedProvider(String)
     case noVideoOnPage(String)
+    case drmProtected
+    case accessExpired
+    case http(StreamHTTPError)
 
     var errorDescription: String? {
         switch self {
         case .notAnAddress:
             "That does not look like a video link. Paste an address that starts with http:// or https://."
-        case let .playerOnlySite(service):
-            "\(service) videos play only inside \(service)'s own player, so Cinema Player cannot open this link. A direct link to a video file or an HLS playlist works."
-        case let .unreachable(reason):
-            "Cinema Player could not reach that link: \(reason)"
-        case .insecurePage:
-            "Cinema Player reads pages over https only. An http link straight to a video file still plays." 
+        case let .unsupportedProvider(service):
+            "Cinema Player does not support \(service) links. Sites like it hand video to their own player, which needs a provider-specific extractor, a signed-in session, or DRM that only that player can open."
         case let .noVideoOnPage(host):
-            "That page on \(host) does not offer a video Cinema Player can open. Look for a direct link to the video file itself."
+            "That page on \(host) does not expose a video Cinema Player can open. A direct link to the video file or an HLS playlist works."
+        case .drmProtected:
+            "That stream is DRM-protected and can only be played by its authorised provider."
+        case .accessExpired:
+            "That video link has expired or needs to be opened through its original website."
+        case let .http(error):
+            error.errorDescription
         }
     }
 }
@@ -31,88 +37,177 @@ enum StreamLinkError: LocalizedError {
 /// Turns a pasted link into something AVPlayer can open. A direct media link is
 /// used as it is; an ordinary web page is read for the video it advertises.
 enum PageVideoResolver {
-    private static let requestTimeout: TimeInterval = 15
-    private static let maximumPageBytes = 8 * 1_024 * 1_024
-
-    /// Sites that hand their video to their own player and never expose a
-    /// stream we could open, so guessing wastes the user's time.
-    private static let playerOnlyHosts: [String: String] = [
+    /// Providers that hand video to their own player. Not a claim that their
+    /// video is impossible to obtain — only that doing so needs a per-provider
+    /// extractor, an authenticated session, or DRM support that this app has no
+    /// business reimplementing.
+    private static let unsupportedProviders: [String: String] = [
         "youtube.com": "YouTube",
         "youtu.be": "YouTube",
-        "vimeo.com": "Vimeo",
         "twitch.tv": "Twitch",
         "netflix.com": "Netflix",
-        "dailymotion.com": "Dailymotion",
+        "disneyplus.com": "Disney+",
+        "primevideo.com": "Prime Video",
+        "hulu.com": "Hulu",
         "tiktok.com": "TikTok",
         "instagram.com": "Instagram",
         "facebook.com": "Facebook",
-        "disneyplus.com": "Disney+",
     ]
 
     static func resolve(_ url: URL) async throws -> ResolvedVideo {
-        if let service = playerOnlyService(for: url) {
-            throw StreamLinkError.playerOnlySite(service)
+        if let service = unsupportedProvider(for: url) {
+            throw StreamLinkError.unsupportedProvider(service)
         }
 
-        let linkType = try await contentType(of: url)
-        if StreamSupport.isMediaContentType(linkType, at: url) {
-            return ResolvedVideo(url: url, title: StreamSupport.title(for: url))
+        let probe: LinkProbe
+        do {
+            probe = try await StreamHTTP.probe(url)
+        } catch let error as StreamHTTPError {
+            throw StreamLinkError.http(error)
         }
 
-        guard StreamSupport.isPageContentType(linkType) else {
+        switch probe.kind {
+        case .media:
+            return try await resolvedMedia(probe)
+        case .page:
+            return try await resolveFromPage(probe)
+        case .unknown:
             throw StreamLinkError.noVideoOnPage(url.host ?? "that host")
         }
+    }
 
-        let page = try await loadPage(url)
-        guard let candidate = videoURL(inHTML: page, relativeTo: url) else {
-            throw StreamLinkError.noVideoOnPage(url.host ?? "that host")
-        }
-
-        // A page often advertises another page — an embedded player, say — so
-        // the candidate has to prove it is really media.
-        let candidateType = try await contentType(of: candidate)
-        guard StreamSupport.isMediaContentType(candidateType, at: candidate) else {
-            throw StreamLinkError.noVideoOnPage(url.host ?? "that host")
+    private static func resolvedMedia(_ probe: LinkProbe) async throws -> ResolvedVideo {
+        if try await isDRMProtected(probe) {
+            throw StreamLinkError.drmProtected
         }
 
         return ResolvedVideo(
-            url: candidate,
-            title: pageTitle(inHTML: page) ?? StreamSupport.title(for: candidate)
+            url: probe.finalURL,
+            title: StreamSupport.title(for: probe.finalURL),
+            // HLS is fetched segment by segment and never needs ranges.
+            needsLocalCopy: !probe.supportsRanges && !isPlaylist(probe)
         )
     }
 
-    static func playerOnlyService(for url: URL) -> String? {
+    private static func resolveFromPage(_ probe: LinkProbe) async throws -> ResolvedVideo {
+        let host = probe.finalURL.host ?? "that host"
+
+        let page: String
+        do {
+            page = try await StreamHTTP.page(at: probe.finalURL)
+        } catch let error as StreamHTTPError {
+            throw StreamLinkError.http(error)
+        }
+
+        let candidates = videoURLs(inHTML: page, relativeTo: probe.finalURL)
+        guard !candidates.isEmpty else {
+            throw StreamLinkError.noVideoOnPage(host)
+        }
+
+        // A page often advertises another page — an embedded player, say — so
+        // each candidate has to prove it is really media.
+        var lastFailure: Error?
+        for candidate in candidates {
+            do {
+                let candidateProbe = try await StreamHTTP.probe(candidate)
+                guard candidateProbe.kind == .media else { continue }
+
+                let media = try await resolvedMedia(candidateProbe)
+                return ResolvedVideo(
+                    url: media.url,
+                    title: pageTitle(inHTML: page) ?? media.title,
+                    needsLocalCopy: media.needsLocalCopy
+                )
+            } catch {
+                lastFailure = error
+                continue
+            }
+        }
+
+        if let drm = lastFailure as? StreamLinkError, case .drmProtected = drm {
+            throw drm
+        }
+        throw StreamLinkError.noVideoOnPage(host)
+    }
+
+    /// A playlist whose segments are locked needs a provider's own player.
+    private static func isDRMProtected(_ probe: LinkProbe) async throws -> Bool {
+        guard isPlaylist(probe) else { return false }
+
+        guard let manifest = try? await StreamHTTP.manifest(at: probe.finalURL) else { return false }
+        return manifest.contains("#EXT-X-SESSION-KEY")
+            || manifest.range(of: #"#EXT-X-KEY:(?!METHOD=NONE)"#, options: .regularExpression) != nil
+    }
+
+    private static func isPlaylist(_ probe: LinkProbe) -> Bool {
+        StreamSupport.playlistExtensions.contains(probe.finalURL.pathExtension.lowercased())
+            || probe.contentType.lowercased().contains("mpegurl")
+            || probe.contentType.lowercased().contains("dash+xml")
+    }
+
+    static func unsupportedProvider(for url: URL) -> String? {
         guard let host = url.host?.lowercased() else { return nil }
 
-        return playerOnlyHosts.first { knownHost, _ in
+        return unsupportedProviders.first { knownHost, _ in
             host == knownHost || host.hasSuffix(".\(knownHost)")
         }?.value
     }
 
-    /// The video a page advertises, in the order of how reliable each hint is.
-    static func videoURL(inHTML html: String, relativeTo pageURL: URL) -> URL? {
+    // MARK: - Extraction
+
+    /// Every video a page advertises, best hint first and duplicates removed.
+    /// JSON-LD leads because a publisher writes it to describe the work itself;
+    /// the social-card tags follow; the markup is the last resort because a
+    /// `<video>` can just as easily be a background loop.
+    static func videoURLs(inHTML html: String, relativeTo pageURL: URL) -> [URL] {
+        let base = baseURL(inHTML: html, relativeTo: pageURL) ?? pageURL
         let metadata = metaTags(inHTML: html)
-        let metaKeys = [
-            "og:video:secure_url", "og:video:url", "og:video",
-            "twitter:player:stream",
-        ]
 
-        let candidates = metaKeys.compactMap { metadata[$0] } + embeddedSourceValues(inHTML: html)
+        let ordered =
+            allMatches(#""contentUrl"\s*:\s*"([^"]+)""#, in: html, group: 1).map(decodeEntities)
+            + ["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"]
+                .compactMap { metadata[$0] }
+            + sourceValues(inHTML: html)
 
-        for candidate in candidates {
-            guard let url = absoluteURL(candidate, relativeTo: pageURL),
-                  StreamSupport.isStreamable(url),
-                  url.absoluteString != pageURL.absoluteString else {
+        var seen = Set<String>()
+        var urls: [URL] = []
+        for candidate in ordered {
+            guard let url = absoluteURL(candidate, relativeTo: base),
+                  !StreamAddressPolicy.isObviouslyLocal(url),
+                  url.absoluteString != pageURL.absoluteString,
+                  seen.insert(url.absoluteString).inserted else {
                 continue
             }
-            return url
+            urls.append(url)
         }
-        return nil
+        return preferPlayableFormats(urls)
+    }
+
+    /// AVFoundation opens some containers and not others, so a page offering
+    /// several `<source>` formats should be tried in an order that works.
+    private static func preferPlayableFormats(_ urls: [URL]) -> [URL] {
+        urls.enumerated()
+            .sorted { left, right in
+                let leftRank = formatRank(left.element)
+                let rightRank = formatRank(right.element)
+                return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
+            }
+            .map(\.element)
+    }
+
+    private static func formatRank(_ url: URL) -> Int {
+        switch url.pathExtension.lowercased() {
+        case "mp4", "m4v", "mov": 0
+        case "m3u8", "m3u": 1
+        case "": 2
+        case "webm", "mkv", "ogv", "ogg": 4
+        default: 3
+        }
     }
 
     static func pageTitle(inHTML html: String) -> String? {
         if let ogTitle = metaTags(inHTML: html)["og:title"], !ogTitle.isEmpty {
-            return decodeEntities(ogTitle)
+            return ogTitle
         }
 
         guard let match = firstMatch(#"<title[^>]*>([\s\S]*?)</title>"#, in: html, group: 1) else {
@@ -120,6 +215,15 @@ enum PageVideoResolver {
         }
         let title = decodeEntities(match).trimmingCharacters(in: .whitespacesAndNewlines)
         return title.isEmpty ? nil : title
+    }
+
+    /// `<base href>` changes what every relative address on the page means.
+    static func baseURL(inHTML html: String, relativeTo pageURL: URL) -> URL? {
+        guard let tag = firstMatch(#"<base\b[^>]*>"#, in: html, group: 0),
+              let href = firstMatch(#"href\s*=\s*["']([^"']+)["']"#, in: tag, group: 1) else {
+            return nil
+        }
+        return absoluteURL(decodeEntities(href), relativeTo: pageURL)
     }
 
     private static func metaTags(inHTML html: String) -> [String: String] {
@@ -138,95 +242,36 @@ enum PageVideoResolver {
         return tags
     }
 
-    private static func embeddedSourceValues(inHTML html: String) -> [String] {
+    private static func sourceValues(inHTML html: String) -> [String] {
         let patterns = [
             #"<video\b[^>]*\bsrc\s*=\s*["']([^"']+)["']"#,
             #"<source\b[^>]*\bsrc\s*=\s*["']([^"']+)["']"#,
-            #""contentUrl"\s*:\s*"([^"]+)""#,
         ]
         return patterns.flatMap { allMatches($0, in: html, group: 1) }.map(decodeEntities)
     }
 
-    private static func absoluteURL(_ value: String, relativeTo pageURL: URL) -> URL? {
+    private static func absoluteURL(_ value: String, relativeTo base: URL) -> URL? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("data:"), !trimmed.hasPrefix("blob:") else { return nil }
 
         if trimmed.hasPrefix("//") {
-            return URL(string: "\(pageURL.scheme ?? "https"):\(trimmed)")
+            return URL(string: "\(base.scheme ?? "https"):\(trimmed)")
         }
-        return URL(string: trimmed, relativeTo: pageURL)?.absoluteURL
+        return URL(string: trimmed, relativeTo: base)?.absoluteURL
     }
 
     private static func decodeEntities(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&amp;", with: "&")
+        var decoded = value
+            .replacingOccurrences(of: "\\/", with: "/")
             .replacingOccurrences(of: "&#38;", with: "&")
             .replacingOccurrences(of: "&#x26;", with: "&")
             .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#34;", with: "\"")
             .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "\\/", with: "/")
-    }
-
-    private static func contentType(of url: URL) async throws -> String {
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = requestTimeout
-
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return "" }
-
-            // Not every host answers HEAD; a one-byte range works everywhere.
-            if http.statusCode == 405 || http.statusCode == 501 {
-                return try await contentTypeByRange(of: url)
-            }
-            guard (200..<400).contains(http.statusCode) else {
-                throw StreamLinkError.unreachable("the host answered \(http.statusCode).")
-            }
-            return http.value(forHTTPHeaderField: "Content-Type") ?? ""
-        } catch let error as StreamLinkError {
-            throw error
-        } catch {
-            throw transportError(error)
-        }
-    }
-
-    private static func transportError(_ error: Error) -> StreamLinkError {
-        let code = (error as NSError).code
-        if code == NSURLErrorAppTransportSecurityRequiresSecureConnection {
-            return .insecurePage
-        }
-        return .unreachable(error.localizedDescription)
-    }
-
-    private static func contentTypeByRange(of url: URL) async throws -> String {
-        var request = URLRequest(url: url)
-        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-        request.timeoutInterval = requestTimeout
-
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { return "" }
-        guard (200..<400).contains(http.statusCode) else {
-            throw StreamLinkError.unreachable("the host answered \(http.statusCode).")
-        }
-        return http.value(forHTTPHeaderField: "Content-Type") ?? ""
-    }
-
-    private static func loadPage(_ url: URL) async throws -> String {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = requestTimeout
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<400).contains(http.statusCode) {
-                throw StreamLinkError.unreachable("the host answered \(http.statusCode).")
-            }
-            return String(decoding: data.prefix(maximumPageBytes), as: UTF8.self)
-        } catch let error as StreamLinkError {
-            throw error
-        } catch {
-            throw transportError(error)
-        }
+            .replacingOccurrences(of: "&apos;", with: "'")
+        // Ampersands last, so "&amp;quot;" does not become a quote.
+        decoded = decoded.replacingOccurrences(of: "&amp;", with: "&")
+        return decoded
     }
 
     private static func firstMatch(_ pattern: String, in text: String, group: Int) -> String? {
