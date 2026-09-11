@@ -215,6 +215,11 @@ struct ContentView: View {
                                 remove: {
                                     if selection == item.id { selection = nil }
                                     library.remove(item)
+                                },
+                                revealInFinder: { library.revealInFinder(item) },
+                                moveToTrash: {
+                                    if selection == item.id { selection = nil }
+                                    library.moveToTrash(item)
                                 }
                             )
                         }
@@ -316,6 +321,8 @@ private struct LibraryRow: View {
     let play: () -> Void
     let toggleFavorite: () -> Void
     let remove: () -> Void
+    let revealInFinder: () -> Void
+    let moveToTrash: () -> Void
 
     var body: some View {
         HStack(spacing: 9) {
@@ -373,7 +380,10 @@ private struct LibraryRow: View {
             Button("Play", action: play)
             Button(isFavorite ? "Remove from favorites" : "Add to favorites", action: toggleFavorite)
             Divider()
+            Button("Reveal in Finder", action: revealInFinder)
+            Divider()
             Button("Remove from library", role: .destructive, action: remove)
+            Button("Move to Trash", role: .destructive, action: moveToTrash)
         }
     }
 }
