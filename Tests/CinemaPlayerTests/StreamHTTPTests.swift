@@ -66,7 +66,7 @@ final class StubProtocol: URLProtocol {
 }
 
 /// A minimal MP4 header: a box length, then "ftyp".
-private let mp4Bytes = Data([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D, 0, 0, 0, 0])
+let mp4Bytes = Data([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D, 0, 0, 0, 0])
 
 final class StreamHTTPTests: XCTestCase {
     private let movieURL = URL(string: "https://93.184.216.34/movie.mp4")!
@@ -202,5 +202,71 @@ final class StreamHTTPTests: XCTestCase {
         XCTAssertEqual(StreamHTTP.sniff(Data("<html lang=\"en\">".utf8)), .page)
         XCTAssertNil(StreamHTTP.sniff(Data("plain words".utf8)))
         XCTAssertNil(StreamHTTP.sniff(Data()))
+    }
+
+    func testNamesABotWallRatherThanJustItsStatusCode() async {
+        StubProtocol.install { _ in
+            .init(
+                status: 403,
+                headers: ["Content-Type": "text/html", "Server": "cloudflare", "cf-mitigated": "challenge"],
+                body: Data("<!DOCTYPE html><html>challenge".utf8)
+            )
+        }
+
+        do {
+            _ = try await StreamHTTP.probe(movieURL)
+            XCTFail("a challenge page should not resolve")
+        } catch let error as StreamHTTPError {
+            guard case .botChallenge = error else {
+                return XCTFail("expected a bot-challenge reason, got \(error)")
+            }
+            XCTAssertTrue(error.errorDescription?.contains("bot check") == true)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testAnOrdinaryForbiddenIsNotMistakenForABotWall() async {
+        StubProtocol.install { _ in
+            .init(status: 403, headers: ["Content-Type": "text/html", "Server": "nginx"], body: Data("nope".utf8))
+        }
+
+        do {
+            _ = try await StreamHTTP.probe(movieURL)
+            XCTFail("a 403 should not resolve")
+        } catch let error as StreamHTTPError {
+            guard case .status(403) = error else {
+                return XCTFail("expected a plain status, got \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+}
+
+extension StreamHTTPTests {
+    func testSilenceOnAcceptRangesIsVerifiedRatherThanAssumed() async throws {
+        // A host that serves ranges without advertising them on HEAD must not
+        // be condemned to a full download.
+        StubProtocol.install { request in
+            request.httpMethod == "HEAD"
+                ? .init(status: 200, headers: ["Content-Type": "video/mp4"])
+                : .init(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-15/1000"], body: mp4Bytes)
+        }
+
+        let probe = try await StreamHTTP.probe(URL(string: "https://93.184.216.34/movie.mp4")!)
+        XCTAssertEqual(StubProtocol.methods, ["HEAD", "GET"], "the silence has to be checked")
+        XCTAssertTrue(probe.supportsRanges)
+    }
+
+    func testAHostThatIgnoresRangeIsStillCaught() async throws {
+        StubProtocol.install { request in
+            request.httpMethod == "HEAD"
+                ? .init(status: 200, headers: ["Content-Type": "video/mp4", "Content-Length": "2848208"])
+                : .init(status: 200, headers: ["Content-Type": "video/mp4", "Content-Length": "2848208"], body: mp4Bytes)
+        }
+
+        let probe = try await StreamHTTP.probe(URL(string: "https://93.184.216.34/movie.mp4")!)
+        XCTAssertFalse(probe.supportsRanges, "a 200 to a ranged GET means the whole file came back")
     }
 }

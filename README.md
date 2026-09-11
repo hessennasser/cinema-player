@@ -22,7 +22,7 @@ Cinema Player is an open-source macOS video player built with SwiftUI and AVKit.
 - Plays through a playlist with autoplay, next and previous, repeat, and shuffle
 - Provides keyboard controls, 10-second skips, speed, volume, aspect-fit modes, and a clean fullscreen experience
 - Hides player controls when idle and reveals them on mouse movement or keyboard interaction
-- Lets you choose embedded subtitle tracks or load external `.srt` files, with a simple subtitle timing adjustment
+- Lets you choose embedded subtitle tracks or load external SubRip (`.srt`) and WebVTT (`.vtt`) files, with a simple subtitle timing adjustment; a file that is not UTF-8 is still read
 - Switches between embedded audio tracks when a file has more than one
 - Reveals a title in Finder, copies a stream's link, or moves a file to the Trash straight from the library
 - Reports to the system Now Playing widget and Control Center and answers the keyboard media keys

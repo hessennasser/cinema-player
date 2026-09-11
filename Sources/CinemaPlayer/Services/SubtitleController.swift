@@ -24,13 +24,13 @@ final class SubtitleController: ObservableObject {
 
     func chooseSubtitle(onLoad: (() -> Void)? = nil) {
         let panel = NSOpenPanel()
-        panel.title = "Choose an SRT subtitle"
-        panel.message = "Cinema Player reads the subtitle file you choose."
+        panel.title = "Choose a subtitle file"
+        panel.message = "Cinema Player reads SubRip (.srt) and WebVTT (.vtt) subtitles."
         panel.prompt = "Use Subtitle"
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [UTType(filenameExtension: "srt") ?? .plainText]
+        panel.allowedContentTypes = SubtitleFileSupport.openPanelTypes
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if load(from: url) {
@@ -48,7 +48,7 @@ final class SubtitleController: ObservableObject {
         }
 
         do {
-            let source = try String(contentsOf: url, encoding: .utf8)
+            let source = try SubtitleFileSupport.readText(at: url)
             cues = try SubtitleParser.parse(source)
             loadedSubtitleName = url.deletingPathExtension().lastPathComponent
             syncOffset = 0
